@@ -59,6 +59,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             -sdk iphoneos \
+            -quiet \
             clean build
 
       - name: Pack Unsigned IPA
