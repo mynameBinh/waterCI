@@ -31,8 +31,8 @@ jobs:
             npm install
           fi
 
-      # BƯỚC MẤU CHỐT NÂNG CẤP: Ép máy ảo gỡ triệt để gói lỗi expo-ui ra khỏi hệ thống trước khi build
-      - name: Force Force Remove Broken Expo UI Package
+      # Ép máy ảo gỡ triệt để gói expo-ui lỗi thời ra khỏi hệ thống trước khi build
+      - name: Force Remove Broken Expo UI Package
         run: |
           npm uninstall expo-ui @expo/ui || true
           yarn remove expo-ui @expo/ui || true
@@ -59,6 +59,7 @@ jobs:
       - name: Build Expo iOS JS Bundle
         run: npx expo export --platform ios
 
+      # Ép hạ Deployment Target xuống iOS 17.0 để bỏ qua lỗi thiếu SDK iOS 18.1 trên máy chủ
       - name: Build Xcode Project (Unsigned)
         run: |
           cd ios
@@ -69,6 +70,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            IPHONEOS_DEPLOYMENT_TARGET="17.0" \
             -sdk iphoneos \
             clean build | xcbeautify --quieter
 
