@@ -59,13 +59,19 @@ jobs:
       - name: Build Expo iOS JS Bundle
         run: npx expo export --platform ios
 
-      # Ép hạ Deployment Target xuống iOS 17.0 để bỏ qua lỗi thiếu SDK iOS 18.1 trên máy chủ
+      # MẸO MỚI: Tự động quét cấu hình Xcode để hạ iOS 18.1 xuống iOS 17.0 chuẩn chỉ trong file dự án
+      - name: Modify Deployment Target in Xcode Project File
+        run: |
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18.1;/IPHONEOS_DEPLOYMENT_TARGET = 17.0;/g' ios/*.xcodeproj/project.pbxproj || true
+
+      # Bản cập nhật lệnh Build Xcode: Đã bổ sung -destination 'generic/platform=iOS' để sửa lỗi 70
       - name: Build Xcode Project (Unsigned)
         run: |
           cd ios
           set -o pipefail && xcodebuild -workspace *.xcworkspace \
             -scheme $(ls -d *.xcodeproj | sed 's/\.xcodeproj//') \
             -configuration Release \
+            -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
