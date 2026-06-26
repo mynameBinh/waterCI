@@ -3,10 +3,16 @@ on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15 # Nâng cấp lên macOS 15 để hỗ trợ Xcode 16+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # Ép máy ảo kích hoạt chính xác Xcode phiên bản mới để thỏa mãn React Native
+      - name: Set up Xcode version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.1' # Chọn Xcode 16.1 theo yêu cầu dự án
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -23,7 +29,6 @@ jobs:
             npm install
           fi
 
-      # Cài đặt Expo CLI toàn cục trên máy ảo để hỗ trợ xuất bundle
       - name: Setup Expo CLI
         run: npm install -g expo-cli
 
@@ -40,7 +45,6 @@ jobs:
         env:
           COCOAPODS_DISABLE_STATS: true
 
-      # Lệnh xuất Bundle JS chuẩn cho cấu trúc Expo
       - name: Build Expo iOS JS Bundle
         run: npx expo export --platform ios
 
