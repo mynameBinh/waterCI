@@ -1,20 +1,18 @@
-name: Build Unsigned React Native IPA
+name: Build Unsigned Expo React Native IPA
 on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: macos-14 # Sử dụng macOS 14 hỗ trợ Xcode đời cao ổn định
+    runs-on: macos-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Sửa lỗi 1 & cập nhật lên Node 24 tương thích hệ thống mới nhất
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '24' 
 
-      # Sửa lỗi 2: Tự động nhận diện Yarn hoặc NPM để cài đặt, không bắt buộc file lock khắt khe
       - name: Install JavaScript Dependencies
         run: |
           if [ -f "yarn.lock" ]; then
@@ -24,6 +22,10 @@ jobs:
           else
             npm install
           fi
+
+      # Cài đặt Expo CLI toàn cục trên máy ảo để hỗ trợ xuất bundle
+      - name: Setup Expo CLI
+        run: npm install -g expo-cli
 
       - name: Setup Ruby and Cocoapods Cache
         uses: ruby/setup-ruby@v1
@@ -38,10 +40,9 @@ jobs:
         env:
           COCOAPODS_DISABLE_STATS: true
 
-      - name: Build React Native JS Bundle
-        run: |
-          mkdir -p ios/main.jsbundle
-          npx react-native bundle --entry-file index.js --platform ios --dev false --bundle-output ios/main.jsbundle --assets-dest ios
+      # Lệnh xuất Bundle JS chuẩn cho cấu trúc Expo
+      - name: Build Expo iOS JS Bundle
+        run: npx expo export --platform ios
 
       - name: Build Xcode Project (Unsigned)
         run: |
@@ -61,10 +62,10 @@ jobs:
           cd ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Release-iphoneos/
           mkdir Payload
           cp -r *.app Payload/
-          zip -r react_native_unsigned.ipa Payload
+          zip -r expo_unsigned.ipa Payload
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: react-native-unsigned-ipa
-          path: ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Release-iphoneos/react_native_unsigned.ipa
+          name: expo-unsigned-ipa
+          path: ~/Library/Developer/Xcode/DerivedData/*/Build/Products/Release-iphoneos/expo_unsigned.ipa
