@@ -43,6 +43,14 @@ jobs:
       - name: Fix Expo Dependencies Mismatch
         run: npx expo install --fix
 
+      # MẸO MỚI: Sửa trực tiếp tệp Podfile để ép hạ nền tảng hệ điều hành xuống iOS 17.0 từ gốc
+      - name: Force iOS 17.0 in Podfile
+        run: |
+          if [ -f "ios/Podfile" ]; then
+            sed -i '' "s/platform :ios, '18.1'/platform :ios, '17.0'/g" ios/Podfile || true
+            sed -i '' "s/platform :ios, '18.0'/platform :ios, '17.0'/g" ios/Podfile || true
+          fi
+
       - name: Setup Ruby and Cocoapods Cache
         uses: ruby/setup-ruby@v1
         with:
@@ -59,12 +67,12 @@ jobs:
       - name: Build Expo iOS JS Bundle
         run: npx expo export --platform ios
 
-      # MẸO MỚI: Tự động quét cấu hình Xcode để hạ iOS 18.1 xuống iOS 17.0 chuẩn chỉ trong file dự án
+      # Tự động quét cấu hình Xcode để sửa mọi biến môi trường Deployment Target còn sót lại
       - name: Modify Deployment Target in Xcode Project File
         run: |
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18.1;/IPHONEOS_DEPLOYMENT_TARGET = 17.0;/g' ios/*.xcodeproj/project.pbxproj || true
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18.0;/IPHONEOS_DEPLOYMENT_TARGET = 17.0;/g' ios/*.xcodeproj/project.pbxproj || true
 
-      # Bản cập nhật lệnh Build Xcode: Đã bổ sung -destination 'generic/platform=iOS' để sửa lỗi 70
       - name: Build Xcode Project (Unsigned)
         run: |
           cd ios
