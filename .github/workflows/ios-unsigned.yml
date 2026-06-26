@@ -31,10 +31,15 @@ jobs:
             npm install
           fi
 
+      # BƯỚC MẤU CHỐT NÂNG CẤP: Ép máy ảo gỡ triệt để gói lỗi expo-ui ra khỏi hệ thống trước khi build
+      - name: Force Force Remove Broken Expo UI Package
+        run: |
+          npm uninstall expo-ui @expo/ui || true
+          yarn remove expo-ui @expo/ui || true
+
       - name: Setup Expo CLI
         run: npm install -g expo-cli
 
-      # BƯỚC THẦN THÁNH: Tự động rà soát và sửa lỗi lệch phiên bản của Expo Modules
       - name: Fix Expo Dependencies Mismatch
         run: npx expo install --fix
 
