@@ -3,15 +3,22 @@ on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-14 # Chuyển về macos-14 để dứt điểm lỗi hệ thống đóng gói của bản 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Ép cài Xcode 16.1 trên nền macos-14 để thỏa mãn yêu cầu tối thiểu của React Native
       - name: Set up Xcode version
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '16.1'
+
+      # Lệnh mấu chốt: Khởi tạo và kích hoạt bộ đệm thiết bị của Apple để tránh lỗi "Platform Not Installed"
+      - name: Initialize Apple CoreSimulator Service
+        run: |
+          xcrun simctl list runtimes
+          sudo xcodebuild -runFirstLaunch
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -31,7 +38,7 @@ jobs:
             npm install
           fi
 
-      # Ép máy ảo gỡ triệt để gói expo-ui lỗi thời ra khỏi hệ thống trước khi build
+      # Đảm bảo gỡ bỏ hoàn toàn gói expo-ui xung đột
       - name: Force Remove Broken Expo UI Package
         run: |
           npm uninstall expo-ui @expo/ui || true
@@ -42,14 +49,6 @@ jobs:
 
       - name: Fix Expo Dependencies Mismatch
         run: npx expo install --fix
-
-      # MẸO MỚI: Sửa trực tiếp tệp Podfile để ép hạ nền tảng hệ điều hành xuống iOS 17.0 từ gốc
-      - name: Force iOS 17.0 in Podfile
-        run: |
-          if [ -f "ios/Podfile" ]; then
-            sed -i '' "s/platform :ios, '18.1'/platform :ios, '17.0'/g" ios/Podfile || true
-            sed -i '' "s/platform :ios, '18.0'/platform :ios, '17.0'/g" ios/Podfile || true
-          fi
 
       - name: Setup Ruby and Cocoapods Cache
         uses: ruby/setup-ruby@v1
@@ -67,7 +66,7 @@ jobs:
       - name: Build Expo iOS JS Bundle
         run: npx expo export --platform ios
 
-      # Tự động quét cấu hình Xcode để sửa mọi biến môi trường Deployment Target còn sót lại
+      # Đồng bộ cấu hình dự án về iOS 17.0 để máy ảo Mac arm64 đóng gói trơn tru nhất
       - name: Modify Deployment Target in Xcode Project File
         run: |
           sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 18.1;/IPHONEOS_DEPLOYMENT_TARGET = 17.0;/g' ios/*.xcodeproj/project.pbxproj || true
