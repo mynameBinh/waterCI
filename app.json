@@ -9,7 +9,14 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/camera.png",
-      "bundleIdentifier": "com.tbinh.waterCheckIn"
+      "bundleIdentifier": "com.tbinh.waterCheckIn",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Ứng dụng cần quyền Camera để chụp ảnh kiểm tra lượng nước.",
+        "NSPhotoLibraryUsageDescription": "Ứng dụng cần quyền truy cập thư viện ảnh để lưu và xử lý ảnh.",
+        "NSPhotoLibraryAddUsageDescription": "Ứng dụng cần quyền lưu ảnh vào thư viện.",
+        "NSUserTrackingUsageDescription": "Ứng dụng cần theo dõi để cung cấp trải nghiệm cá nhân hóa.",
+        "UIBackgroundModes": ["fetch", "remote-notification"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -17,7 +24,8 @@
         "foregroundImage": "./assets/icon.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.tbinh.waterCheckIn"
+      "package": "com.tbinh.waterCheckIn",
+      "permissions": ["CAMERA", "NOTIFICATIONS", "FOREGROUND_SERVICE"]
     },
     "web": {
       "output": "static",
