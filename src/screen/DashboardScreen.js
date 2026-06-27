@@ -230,12 +230,12 @@ export default function DashboardScreen({ token, onLogout }) {
   }, []);
 
   const updatePushTokenToBackend = useCallback(async (pushToken) => {
-    if (!pushToken) return; // Không có token thì không gọi API
+    if (pushToken === null || pushToken === undefined) return; // Chỉ skip khi chưa từng có token (Expo Go)
     try {
       await fetch(`${API_BASE}/api/users/update-push-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ push_token: pushToken }),
+        body: JSON.stringify({ push_token: pushToken }), // '' khi tắt, token thật khi bật
       });
     } catch { /* ignore */ }
   }, [token]);
