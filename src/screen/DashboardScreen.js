@@ -316,7 +316,7 @@ export default function DashboardScreen({ token, onLogout }) {
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
-      if (!res.ok) throw new Error('Không tìm thấy nước hoặc vật chứa hợp lệ');
+      if (!res.ok) throw new Error('Không phát hiện nước');
       const data = await res.json();
       const vol = data.max_volume || 250;
       setMaxVolume(vol); maxVolumeRef.current = vol;
@@ -475,9 +475,7 @@ export default function DashboardScreen({ token, onLogout }) {
       <Modal visible={showVolumeModal} transparent animationType="fade">
         <View style={styles.modalWaterOverlay}>
           <View style={[styles.modalWaterCard, { backgroundColor: colors.card }]}>
-            <Text style={[styles.waterModalTitle, { color: colors.text }]}>
-              AI nhận diện: {containerLabel}! 🎉
-            </Text>
+            
             <Text style={styles.volumeDisplayValue}>
               {selectedVolume} <Text style={{ fontSize: 18, fontWeight: '600' }}>/ {maxVolume} ml</Text>
             </Text>
@@ -519,7 +517,7 @@ export default function DashboardScreen({ token, onLogout }) {
       {aiLoading && (
         <View style={styles.globalLoading}>
           <ActivityIndicator size="large" color="#0ea5e9" />
-          <Text style={styles.loadingText}>AI đang phân loại thiết bị vật chứa...</Text>
+          <Text style={styles.loadingText}>Đang kiểm tra...</Text>
         </View>
       )}
     </View>
