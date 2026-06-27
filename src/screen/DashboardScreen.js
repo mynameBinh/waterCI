@@ -17,14 +17,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import HeaderComponent          from '../components/HeaderComponent';
-import HistoryComponent         from '../components/HistoryComponent';
+import HeaderComponent from '../components/HeaderComponent';
+import HistoryComponent from '../components/HistoryComponent';
 import MainActionButtonComponent from '../components/MainActionButtonComponent';
-import { useTheme }             from '../context/ThemeContext';
-import { decodeJWT }            from '../utils/jwt';
-import NotificationsTab         from '../tabs/NotificationsTab';
-import ProfileTab               from '../tabs/ProfileTab';
-import RoadmapTab               from '../tabs/RoadmapTab';
+import { useTheme } from '../context/ThemeContext';
+import NotificationsTab from '../tabs/NotificationsTab';
+import ProfileTab from '../tabs/ProfileTab';
+import RoadmapTab from '../tabs/RoadmapTab';
+import { decodeJWT } from '../utils/jwt';
 
 const API_BASE = 'https://binhhn21-water-check-in-backend.hf.space';
 
@@ -191,12 +191,8 @@ export default function DashboardScreen({ token, onLogout }) {
     } catch { /* ignore */ }
   }, []);
 
-  const registerForPushNotificationsAsync = useCallback(async () => {
-    if (!Device.isDevice) {
-      Alert.alert('Lưu ý', 'Cần dùng thiết bị thật để nhận Push Notification');
-      return null;
-    }
-
+  // ── Xin quyền thông báo (chỉ cần quyền, không cần push token) ───────────────
+  const requestNotificationPermission = useCallback(async () => {
     const { status: existing } = await Notifications.getPermissionsAsync();
     const finalStatus = existing !== 'granted'
       ? (await Notifications.requestPermissionsAsync()).status
@@ -204,11 +200,11 @@ export default function DashboardScreen({ token, onLogout }) {
 
     if (finalStatus !== 'granted') {
       Alert.alert('Chưa cấp quyền', 'Phải bật quyền thông báo thì mới nhận được lời nhắc nha!');
-      return null;
+      return false;
     }
 
     if (Platform.OS === 'android') {
-      Notifications.setNotificationChannelAsync('water-reminder', {
+      await Notifications.setNotificationChannelAsync('water-reminder', {
         name: 'Nhắc nhở uống nước',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
@@ -217,17 +213,24 @@ export default function DashboardScreen({ token, onLogout }) {
       });
     }
 
+    return true;
+  }, []);
+
+  // ── Lấy push token (tuỳ chọn — bỏ qua nếu không có projectId / Expo Go) ────
+  const tryGetPushToken = useCallback(async () => {
+    if (!Device.isDevice) return null; // Simulator/Expo Go preview — bỏ qua lặng lẽ
+
     try {
       const projectId = Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-      if (!projectId) { Alert.alert('Lỗi cấu hình', 'Chưa có projectId.'); return null; }
+      if (!projectId) return null; // Không có projectId — bỏ qua lặng lẽ
       return (await Notifications.getExpoPushTokenAsync({ projectId })).data;
     } catch {
-      Alert.alert('Lỗi', 'Không thể lấy được token thông báo.');
-      return null;
+      return null; // Lỗi bất kỳ — bỏ qua, không block local notification
     }
   }, []);
 
   const updatePushTokenToBackend = useCallback(async (pushToken) => {
+    if (!pushToken) return; // Không có token thì không gọi API
     try {
       await fetch(`${API_BASE}/api/users/update-push-token`, {
         method: 'POST',
@@ -238,22 +241,28 @@ export default function DashboardScreen({ token, onLogout }) {
   }, [token]);
 
   const handleTogglePush = useCallback(async (value) => {
-    setIsPushEnabled(value);
     if (value) {
-      const pToken = await registerForPushNotificationsAsync();
+      // 1. Xin quyền trước — nếu từ chối thì dừng lại
+      const granted = await requestNotificationPermission();
+      if (!granted) return; // Không setIsPushEnabled(true) nếu chưa có quyền
+
+      // 2. Đặt lịch local notification — luôn hoạt động kể cả Expo Go
+      setIsPushEnabled(true);
+      await syncScheduledReminders(selectedTimes, true);
+
+      // 3. Thử lấy push token (tuỳ chọn) — thất bại cũng không sao
+      const pToken = await tryGetPushToken();
       if (pToken) {
         setExpoPushToken(pToken);
         await updatePushTokenToBackend(pToken);
-        await syncScheduledReminders(selectedTimes, true);
-      } else {
-        setIsPushEnabled(false);
       }
     } else {
+      setIsPushEnabled(false);
       setExpoPushToken('');
       await updatePushTokenToBackend('');
       await syncScheduledReminders([], false);
     }
-  }, [registerForPushNotificationsAsync, updatePushTokenToBackend, syncScheduledReminders, selectedTimes]);
+  }, [requestNotificationPermission, tryGetPushToken, updatePushTokenToBackend, syncScheduledReminders, selectedTimes]);
 
   const toggleTimeSelection = useCallback((time) => {
     setSelectedTimes(prev => {

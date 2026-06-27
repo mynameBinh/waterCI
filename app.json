@@ -7,16 +7,11 @@
     "icon": "./assets/icon.png",
     "scheme": "myfirstapp",
     "userInterfaceStyle": "automatic",
+    "jsEngine": "hermes",
     "ios": {
       "icon": "./assets/camera.png",
       "bundleIdentifier": "com.tbinh.waterCheckIn",
-      "infoPlist": {
-        "NSCameraUsageDescription": "Ứng dụng cần quyền Camera để chụp ảnh kiểm tra lượng nước.",
-        "NSPhotoLibraryUsageDescription": "Ứng dụng cần quyền truy cập thư viện ảnh để lưu và xử lý ảnh.",
-        "NSPhotoLibraryAddUsageDescription": "Ứng dụng cần quyền lưu ảnh vào thư viện.",
-        "NSUserTrackingUsageDescription": "Ứng dụng cần theo dõi để cung cấp trải nghiệm cá nhân hóa.",
-        "UIBackgroundModes": ["fetch", "remote-notification"]
-      }
+      "jsEngine": "hermes"
     },
     "android": {
       "adaptiveIcon": {
@@ -25,7 +20,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.tbinh.waterCheckIn",
-      "permissions": ["CAMERA", "NOTIFICATIONS", "FOREGROUND_SERVICE"]
+      "jsEngine": "hermes"
     },
     "web": {
       "output": "static",
@@ -48,7 +43,6 @@
           "icon": "./assets/icon.png",
           "color": "#0ea5e9",
           "sounds": [
-            "./assets/sound/pouring_water.wav",
             "./assets/sound/pouring_water.mp3"
           ]
         }
