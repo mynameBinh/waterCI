@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "jsEngine": "hermes",
     "ios": {
-      "icon": "./assets/camera.png",
+      "icon": "./assets/icon.png",
       "bundleIdentifier": "com.tbinh.waterCheckIn",
       "jsEngine": "hermes"
     },
