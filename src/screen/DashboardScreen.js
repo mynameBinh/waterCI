@@ -84,6 +84,7 @@ export default function DashboardScreen({ token, onLogout }) {
   const [selectedVolume,  setSelectedVolumeState] = useState(250);
   const [maxVolume,       setMaxVolume]       = useState(250);
   const [containerType,   setContainerType]   = useState('unknown');
+  const pendingImageUrl = useRef(''); // lưu image_url từ /api/checkin để gửi khi confirm
 
   // Notifications
   const [isPushEnabled,   setIsPushEnabled]   = useState(false);
@@ -233,7 +234,13 @@ export default function DashboardScreen({ token, onLogout }) {
             body:  `${timeStr} Đã điểm, vào check-in uống nước để duy trì chuỗi nào!`,
             sound: Platform.OS === 'ios' ? 'pouring_water.wav' : 'pouring_water.mp3',
             priority: Notifications.AndroidNotificationPriority.HIGH,
-            ...(Platform.OS === 'android' && { channelId: 'water-reminder' }),
+            // Android: icon hiển thị trên status bar và drawer
+            // File icon phải nằm ở android/app/src/main/res/drawable/notification_icon.png
+            // (ảnh trắng trên nền trong suốt, ~24×24dp)
+            ...(Platform.OS === 'android' && {
+              channelId: 'water-reminder',
+              icon: 'notification_icon', // tên file không có đuôi .png
+            }),
           },
           trigger: { type: 'calendar', hour, minute, repeats: true },
         });
@@ -260,6 +267,8 @@ export default function DashboardScreen({ token, onLogout }) {
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#0ea5e9',
         sound: 'pouring_water.mp3',
+        // Icon hiển thị trên status bar (tên file không có đuôi, đặt trong drawable/)
+        enableVibrate: true,
       });
     }
 
@@ -418,6 +427,8 @@ export default function DashboardScreen({ token, onLogout }) {
       if (!res.ok) throw new Error('Không phát hiện nước');
       const data = await res.json();
       const vol = data.max_volume || 250;
+      // Lưu image_url để gửi kèm khi user xác nhận — chưa lưu DB ở bước này
+      pendingImageUrl.current = data.image_url || '';
       setMaxVolume(vol); maxVolumeRef.current = vol;
       setContainerType(data.container_type || 'unknown');
       setSelectedVolume(vol);
@@ -429,15 +440,32 @@ export default function DashboardScreen({ token, onLogout }) {
     }
   }, [token, setSelectedVolume]);
 
-  const handleConfirmVolume = useCallback(() => {
+  const handleConfirmVolume = useCallback(async () => {
+    // Optimistic UI update ngay lập tức
+    const confirmedVol = selectedVolumeRef.current;
     setShowVolumeModal(false);
-    setCurrentWater(prev => prev + selectedVolume);
+    setCurrentWater(prev => prev + confirmedVol);
     setHistory(prev => [
-      { id: Date.now(), time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }), volume: selectedVolume },
+      { id: Date.now(), time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }), volume: confirmedVol },
       ...prev,
     ]);
-    Alert.alert('Tuyệt vời!', `Check-in thành công ${selectedVolume}ml nước. 💧`);
-  }, [selectedVolume]);
+
+    // Gửi volume thực lên backend — lưu DB với đúng số ml user đã chọn
+    try {
+      const res = await fetch(`${API_BASE}/api/checkin/confirm`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume_ml: confirmedVol, image_url: pendingImageUrl.current }),
+      });
+      if (!res.ok) throw new Error();
+      Alert.alert('Tuyệt vời!', `Check-in thành công ${confirmedVol}ml nước. 💧`);
+    } catch {
+      // Nếu lưu DB thất bại — rollback UI
+      setCurrentWater(prev => prev - confirmedVol);
+      setHistory(prev => prev.slice(1));
+      Alert.alert('Lỗi lưu dữ liệu ❌', 'Không thể lưu check-in, vui lòng thử lại.');
+    }
+  }, [token]);
 
   const handleLogoutPrompt = useCallback(() => {
     Alert.alert('Đăng xuất', 'Đăng xuất tài khoản này ư?', [
