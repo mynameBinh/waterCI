@@ -1,8 +1,9 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Camera, CameraView } from 'expo-camera';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
+import * as NavigationBar from 'expo-navigation-bar'; // <-- Đã thêm thư viện Navigation Bar
 import * as Notifications from 'expo-notifications';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -58,6 +59,15 @@ const CONTAINER_HEIGHT = { glass: 135, mug: 120, thermos: 170, bottle: 200 };
 export default function DashboardScreen({ token, onLogout }) {
   const { colors }  = useTheme();
   const insets      = useSafeAreaInsets();
+
+  // ── Ép Android tràn viền và trong suốt thanh điều hướng ──────────────────
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      NavigationBar.setPositionAsync('absolute'); 
+      NavigationBar.setBackgroundColorAsync('#00000000'); 
+      NavigationBar.setButtonStyleAsync('dark'); 
+    }
+  }, []);
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTab,       setActiveTab]       = useState('home');
@@ -135,28 +145,23 @@ export default function DashboardScreen({ token, onLogout }) {
     const payload = decodeJWT(token);
     if (payload?.sub) setUsername(payload.sub);
 
-    const loadData = async () => {
-      try {
-        const headers = { Authorization: `Bearer ${token}` };
-        const [meRes, histRes, streakRes, giftsRes] = await Promise.all([
-          fetch(`${API_BASE}/api/me`,      { headers }),
-          fetch(`${API_BASE}/api/history`, { headers }),
-          fetch(`${API_BASE}/api/streak`,  { headers }),
-          fetch(`${API_BASE}/api/gifts`,   { headers }),
-        ]);
+    // Bỏ async đi để các tiến trình con tự xử lý Promise của chúng
+    const loadData = () => {
+      const headers = { Authorization: `Bearer ${token}` };
 
-        if (meRes.ok) {
-          const me = await meRes.json();
+      // 1. Load thông tin user (độc lập)
+      fetch(`${API_BASE}/api/me`, { headers })
+        .then(res => { if (res.ok) return res.json(); throw new Error(); })
+        .then(me => {
           setGoalMl(me.daily_goal);
           setMemberTier(me.tier || 'Thành viên');
-        }
-        if (streakRes.ok) {
-          const st = await streakRes.json();
-          setStreak(st.streak);
-          setCompletedDates(st.completed_dates || []);
-        }
-        if (histRes.ok) {
-          const hData = await histRes.json();
+        })
+        .catch(() => {}); // lỗi mạng thì bỏ qua, giữ nguyên state
+
+      // 2. Load lịch sử (độc lập)
+      fetch(`${API_BASE}/api/history`, { headers })
+        .then(res => { if (res.ok) return res.json(); throw new Error(); })
+        .then(hData => {
           setHistory(hData.map(item => ({
             id:     item.id,
             time:   new Date(item.timestamp.endsWith('Z') ? item.timestamp : `${item.timestamp}Z`)
@@ -164,11 +169,23 @@ export default function DashboardScreen({ token, onLogout }) {
             volume: item.volume_ml,
           })));
           setCurrentWater(hData.reduce((sum, i) => sum + i.volume_ml, 0));
-        }
-        if (giftsRes.ok) {
-          setGifts(await giftsRes.json());
-        }
-      } catch { /* lỗi mạng — giữ nguyên state */ }
+        })
+        .catch(() => {});
+
+      // 3. Load thông tin streak (độc lập)
+      fetch(`${API_BASE}/api/streak`, { headers })
+        .then(res => { if (res.ok) return res.json(); throw new Error(); })
+        .then(st => {
+          setStreak(st.streak);
+          setCompletedDates(st.completed_dates || []);
+        })
+        .catch(() => {});
+
+      // 4. Load thông tin quà tặng (độc lập)
+      fetch(`${API_BASE}/api/gifts`, { headers })
+        .then(res => { if (res.ok) return res.json(); throw new Error(); })
+        .then(data => setGifts(data))
+        .catch(() => {});
     };
 
     // ── Khôi phục notification settings từ AsyncStorage ──────────────────
@@ -710,9 +727,19 @@ const DockItem = memo(function DockItem({ tab, activeTab, setActiveTab, icon, ac
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container:       { flex: 1 },
-  scrollContent:   { paddingHorizontal: 16, paddingBottom: 125, paddingTop: 2, flex: 1 },
-  profileContent:  { paddingHorizontal: 20, paddingBottom: 110, paddingTop: 20 },
-  roadmapContent:  { paddingHorizontal: 20, paddingBottom: 150, paddingTop: 20 },
+  scrollContent:   { paddingHorizontal: 16, paddingBottom: 125, paddingTop: 2, flex: 1 }, // Giữ nguyên Tab Check-in
+  
+  // Điều chỉnh riêng cho Android tại các Tab còn lại để thu nhỏ chiều cao phần tử
+  profileContent:  { 
+    paddingHorizontal: 20, 
+    paddingBottom: Platform.OS === 'android' ? 95 : 110, 
+    paddingTop: Platform.OS === 'android' ? 12 : 20 
+  },
+  roadmapContent:  { 
+    paddingHorizontal: 20, 
+    paddingBottom: Platform.OS === 'android' ? 130 : 150, 
+    paddingTop: Platform.OS === 'android' ? 12 : 20 
+  },
 
   // Dock
   dockWrapper:     { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 100 },
