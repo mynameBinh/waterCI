@@ -640,7 +640,7 @@ export default function DashboardScreen({ token, onLogout }) {
           <View style={[styles.miniCamContainer, { backgroundColor: colors.card }]}>
             <Text style={[styles.miniCamTitle, { color: colors.text }]}>Chụp ảnh để bắt đầu kiểm tra</Text>
             <View style={styles.cameraFrame}>
-              <CameraView style={styles.cameraView} facing="back" flash={flash} enableTorch={flash === 'on'} ref={cameraRef} zoom={0.2} />
+              <CameraView style={styles.cameraView} facing="back" flash={flash} enableTorch={flash === 'on'} ref={cameraRef} zoom={0} />
             </View>
             <View style={styles.actionRow}>
               <TouchableOpacity style={styles.closeCircle} onPress={() => setShowMiniCam(false)}>
