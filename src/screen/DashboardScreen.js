@@ -234,13 +234,7 @@ export default function DashboardScreen({ token, onLogout }) {
             body:  `${timeStr} Đã điểm, vào check-in uống nước để duy trì chuỗi nào!`,
             sound: Platform.OS === 'ios' ? 'pouring_water.wav' : 'pouring_water.mp3',
             priority: Notifications.AndroidNotificationPriority.HIGH,
-            // Android: icon hiển thị trên status bar và drawer
-            // File icon phải nằm ở android/app/src/main/res/drawable/notification_icon.png
-            // (ảnh trắng trên nền trong suốt, ~24×24dp)
-            ...(Platform.OS === 'android' && {
-              channelId: 'water-reminder',
-              icon: 'notification_icon', // tên file không có đuôi .png
-            }),
+            ...(Platform.OS === 'android' && { channelId: 'water-reminder' }),
           },
           trigger: { type: 'calendar', hour, minute, repeats: true },
         });
@@ -267,8 +261,6 @@ export default function DashboardScreen({ token, onLogout }) {
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#0ea5e9',
         sound: 'pouring_water.mp3',
-        // Icon hiển thị trên status bar (tên file không có đuôi, đặt trong drawable/)
-        enableVibrate: true,
       });
     }
 
@@ -457,13 +449,18 @@ export default function DashboardScreen({ token, onLogout }) {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ volume_ml: confirmedVol, image_url: pendingImageUrl.current }),
       });
-      if (!res.ok) throw new Error();
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}: ${errText}`);
+      }
       Alert.alert('Tuyệt vời!', `Check-in thành công ${confirmedVol}ml nước. 💧`);
-    } catch {
+    } catch (err) {
+      // Log để debug — kiểm tra console khi gặp lỗi (404 = backend chưa có route confirm)
+      console.warn('[checkin/confirm] thất bại:', err.message);
       // Nếu lưu DB thất bại — rollback UI
       setCurrentWater(prev => prev - confirmedVol);
       setHistory(prev => prev.slice(1));
-      Alert.alert('Lỗi lưu dữ liệu ❌', 'Không thể lưu check-in, vui lòng thử lại.');
+      Alert.alert('Lỗi lưu dữ liệu ❌', 'Không thể lưu check-in lên server, vui lòng thử lại.');
     }
   }, [token]);
 

@@ -22,6 +22,12 @@
       "package": "com.tbinh.waterCheckIn",
       "jsEngine": "hermes"
     },
+    // ⬇️ ĐOẠN THÊM MỚI Ở ĐÂY ⬇️
+    "androidNavigationBar": {
+      "visible": true,
+      "backgroundColor": "#00000000",   // Đặt mã màu 8 số (00000000) để làm trong suốt hoàn toàn
+      "barStyle": "dark-content"         // Đặt màu các phím cử chỉ/nút bấm hệ thống thành màu tối (phù hợp nền sáng)
+    },
     "web": {
       "output": "static",
       "favicon": "./assets/icon.png"
@@ -57,7 +63,6 @@
       "eas": {
         "projectId": "06613424-b540-4661-b9b7-678699885849"
       }
-    },
-    "owner": "binhhn2112"
+    }
   }
 }

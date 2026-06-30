@@ -5,8 +5,8 @@ import { useTheme } from '../context/ThemeContext';
 
 // Android màn hình dài hơn nhưng navigation bar chiếm chỗ → thu nhỏ để vừa
 const IS_ANDROID      = Platform.OS === 'android';
-const MAX_LIST_HEIGHT = IS_ANDROID ? 190 : 240;
-const ITEM_PADDING    = IS_ANDROID ? 11  : 16;
+const MAX_LIST_HEIGHT = IS_ANDROID ? 200 : 240;
+const ITEM_PADDING    = IS_ANDROID ? 13  : 16;
 const ITEM_MARGIN_B   = IS_ANDROID ? 8   : 12;
 const ICON_BOX        = IS_ANDROID ? 30  : 36;
 const FONT_TIME       = IS_ANDROID ? 13  : 15;
