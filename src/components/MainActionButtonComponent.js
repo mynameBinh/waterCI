@@ -9,6 +9,12 @@ const MARGIN_VERTICAL  = Platform.OS === 'android' ? 12  : 35;
 const MARGIN_TOP_LABEL = Platform.OS === 'android' ? 10  : 20;
 const LABEL_SIZE       = Platform.OS === 'android' ? 12  : 15;
 
+// Tai thỏ (dài, hẹp, đứng thẳng, đặt gần nhau ở giữa đỉnh nút)
+const EAR_WIDTH       = BTN_SIZE * 0.24;
+const EAR_HEIGHT      = BTN_SIZE * 0.62;
+const EAR_INNER_WIDTH  = EAR_WIDTH * 0.5;
+const EAR_INNER_HEIGHT = EAR_HEIGHT * 0.62;
+
 const MainActionButtonComponent = memo(function MainActionButtonComponent({ onOpen, disabled }) {
   const pulseAnim   = useRef(new Animated.Value(1)).current;
   const opacityAnim = useRef(new Animated.Value(0.6)).current;
@@ -42,6 +48,54 @@ const MainActionButtonComponent = memo(function MainActionButtonComponent({ onOp
           />
         )}
 
+        {/* ── Tai thỏ trái ── */}
+        <LinearGradient
+          colors={disabled ? ['#cbd5e1', '#94a3b8'] : ['#67D8F5', '#0EA5E9']}
+          style={[
+            styles.ear,
+            styles.earLeft,
+            {
+              width: EAR_WIDTH, height: EAR_HEIGHT, borderRadius: EAR_WIDTH,
+              top: -EAR_HEIGHT * 0.50, left: BTN_SIZE * 0.24,
+            },
+          ]}
+        />
+        <View
+          style={[
+            styles.earInner,
+            styles.earLeft,
+            {
+              width: EAR_INNER_WIDTH, height: EAR_INNER_HEIGHT, borderRadius: EAR_INNER_WIDTH,
+              top: -EAR_HEIGHT * 0.33, left: BTN_SIZE * 0.24 + (EAR_WIDTH - EAR_INNER_WIDTH) / 2,
+              backgroundColor: disabled ? '#e2e8f0' : '#fae8f0',
+            },
+          ]}
+        />
+
+        {/* ── Tai thỏ phải ── */}
+        <LinearGradient
+          colors={disabled ? ['#cbd5e1', '#94a3b8'] : ['#67D8F5', '#0EA5E9']}
+          style={[
+            styles.ear,
+            styles.earRight,
+            {
+              width: EAR_WIDTH, height: EAR_HEIGHT, borderRadius: EAR_WIDTH,
+              top: -EAR_HEIGHT * 0.50, right: BTN_SIZE * 0.24,
+            },
+          ]}
+        />
+        <View
+          style={[
+            styles.earInner,
+            styles.earRight,
+            {
+              width: EAR_INNER_WIDTH, height: EAR_INNER_HEIGHT, borderRadius: EAR_INNER_WIDTH,
+              top: -EAR_HEIGHT * 0.33, right: BTN_SIZE * 0.24 + (EAR_WIDTH - EAR_INNER_WIDTH) / 2,
+              backgroundColor: disabled ? '#e2e8f0' : '#fae8f0',
+            },
+          ]}
+        />
+
         <TouchableOpacity activeOpacity={0.8} onPress={onOpen} disabled={disabled} style={styles.btnShadow}>
           <LinearGradient
             colors={disabled ? ['#cbd5e1', '#94a3b8'] : ['#67D8F5', '#0EA5E9']}
@@ -69,7 +123,13 @@ const styles = StyleSheet.create({
   wrapper:           { alignItems: 'center' },
   btnContainer:      { justifyContent: 'center', alignItems: 'center' },
   pulseRing:         { position: 'absolute', borderWidth: 4, borderColor: '#38BDF8' },
-  btnShadow:         { shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.4, shadowRadius: 20, elevation: 12 },
+
+  ear:      { position: 'absolute', borderWidth: 4, borderColor: '#e0f2fe', zIndex: 1 },
+  earInner: { position: 'absolute', zIndex: 2 },
+  earLeft:  { transform: [{ rotate: '-10deg' }] },
+  earRight: { transform: [{ rotate: '10deg' }] },
+
+  btnShadow:         { zIndex: 3, shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.4, shadowRadius: 20, elevation: 12 },
   button:            { justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: '#e0f2fe' },
   iconImage:         { tintColor: '#ffffff' },
   iconImageDisabled: { tintColor: '#f1f5f9' },

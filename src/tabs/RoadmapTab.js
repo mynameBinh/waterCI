@@ -57,7 +57,7 @@ const RoadmapTab = memo(function RoadmapTab({
       >
         <View style={[styles.roadmapHeader, { marginBottom: 20, marginTop: 70 }]}>
           <Text style={styles.roadmapTitle}>Bản đồ Quà Tặng 🎀</Text>
-          <Text style={styles.roadmapSub}>Dành riêng cho "Em bé của admin"</Text>
+          <Text style={styles.roadmapSub}>Dành riêng cho "Em bé của Bình"</Text>
         </View>
 
         <View style={styles.roadmapPathContainer}>

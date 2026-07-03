@@ -3,18 +3,19 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Camera, CameraView } from 'expo-camera';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
-import * as NavigationBar from 'expo-navigation-bar'; // <-- Đã thêm thư viện Navigation Bar
 import * as Notifications from 'expo-notifications';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Modal,
   PanResponder,
   Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,6 +27,7 @@ import { useTheme } from '../context/ThemeContext';
 import NotificationsTab from '../tabs/NotificationsTab';
 import ProfileTab from '../tabs/ProfileTab';
 import RoadmapTab from '../tabs/RoadmapTab';
+import TheoDoiTab from '../tabs/TheoDoiTab';
 import { decodeJWT } from '../utils/jwt';
 
 const API_BASE = 'https://binhhn21-water-check-in-backend.hf.space';
@@ -59,21 +61,26 @@ const CONTAINER_HEIGHT = { glass: 135, mug: 120, thermos: 170, bottle: 200 };
 export default function DashboardScreen({ token, onLogout }) {
   const { colors }  = useTheme();
   const insets      = useSafeAreaInsets();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
-  // ── Ép Android tràn viền và trong suốt thanh điều hướng ──────────────────
-  useEffect(() => {
-    if (Platform.OS === 'android') {
-      NavigationBar.setPositionAsync('absolute'); 
-      NavigationBar.setBackgroundColorAsync('#00000000'); 
-      NavigationBar.setButtonStyleAsync('dark'); 
-    }
-  }, []);
+  // ── Ghi chú: việc ẩn/hiện thanh điều hướng Android (sticky-immersive) ────
+  // được xử lý tập trung ở App.js (áp dụng cho toàn bộ app, kể cả màn hình
+  // Auth/Admin), nên không cần lặp lại logic đó ở đây nữa. `setPositionAsync`
+  // và `setBackgroundColorAsync` cũng đã bị Android edge-to-edge (Android
+  // 15+) vô hiệu hoá nên không còn cần gọi thủ công — layout đã tự tràn viền
+  // và ta chỉ cần tôn trọng `insets` (useSafeAreaInsets) như bên dưới.
+
+  // ── Màn hình nhỏ (< 360dp width, khá phổ biến ở Android tầm trung/giá rẻ)
+  // cần thu nhỏ vài thành phần để tránh tràn/chồng chéo.
+  const isCompactWidth  = Platform.OS === 'android' && screenWidth < 360;
+  const isShortScreen   = screenHeight < 700; // máy màn hình thấp / tỉ lệ vuông hơn
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTab,       setActiveTab]       = useState('home');
   const [currentWater,    setCurrentWater]    = useState(0);
   const [goalMl,          setGoalMl]          = useState(1800);
   const [username,        setUsername]        = useState('Đang tải...');
+  const [userRole,        setUserRole]         = useState('');
   const [memberTier,      setMemberTier]      = useState('Thành viên');
   const [streak,          setStreak]          = useState(0);
   const [completedDates,  setCompletedDates]  = useState([]);
@@ -144,6 +151,7 @@ export default function DashboardScreen({ token, onLogout }) {
     // Lấy username từ token (không cần gọi API thêm)
     const payload = decodeJWT(token);
     if (payload?.sub) setUsername(payload.sub);
+    if (payload?.role) setUserRole(payload.role);
 
     // Bỏ async đi để các tiến trình con tự xử lý Promise của chúng
     const loadData = () => {
@@ -237,6 +245,24 @@ export default function DashboardScreen({ token, onLogout }) {
     return () => { recvSub.remove(); tapSub.remove(); };
   }, []);
 
+  // ── Android: tạo notification channel NGAY KHI APP MỞ ────────────────────
+  // Quan trọng: trên Android 13+, hộp thoại xin quyền thông báo sẽ KHÔNG
+  // hiện ra đúng cách nếu chưa có channel nào tồn tại từ trước. Trước đây
+  // channel chỉ được tạo SAU khi xin quyền (trong requestNotificationPermission)
+  // — sai thứ tự, khiến quyền có thể không bao giờ được cấp thành công trên
+  // nhiều máy Android. Tạo channel sớm ở đây để đảm bảo nó luôn tồn tại
+  // trước bất kỳ lần xin quyền nào.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    Notifications.setNotificationChannelAsync('water-reminder', {
+      name: 'Nhắc nhở uống nước',
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: '#0ea5e9',
+      sound: 'pouring_water.mp3',
+    }).catch(() => {});
+  }, []);
+
   // ── Notification helpers ──────────────────────────────────────────────────
   const syncScheduledReminders = useCallback(async (timesList, enabled) => {
     try {
@@ -261,6 +287,8 @@ export default function DashboardScreen({ token, onLogout }) {
 
   // ── Xin quyền thông báo (chỉ cần quyền, không cần push token) ───────────────
   const requestNotificationPermission = useCallback(async () => {
+    // Channel đã được tạo sẵn từ lúc mount (xem useEffect phía trên) — đúng
+    // thứ tự bắt buộc trên Android 13+ trước khi gọi requestPermissionsAsync.
     const { status: existing } = await Notifications.getPermissionsAsync();
     const finalStatus = existing !== 'granted'
       ? (await Notifications.requestPermissionsAsync()).status
@@ -271,14 +299,16 @@ export default function DashboardScreen({ token, onLogout }) {
       return false;
     }
 
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('water-reminder', {
-        name: 'Nhắc nhở uống nước',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#0ea5e9',
-        sound: 'pouring_water.mp3',
-      });
+    // ── Android 12+: quyền "Alarms & reminders" (exact alarm) ──────────────
+    // Đây là quyền đặc biệt, Android KHÔNG cho phép app tự bật bằng popup —
+    // người dùng phải tự bật trong màn hình Cài đặt hệ thống. Thiếu quyền
+    // này, thông báo hẹn giờ (calendar trigger) vẫn được lên lịch nhưng có
+    // thể bị trễ hàng giờ hoặc không bắn khi máy vào chế độ tiết kiệm pin
+    // (Doze). Mở thẳng màn hình cấp quyền để người dùng bật 1 lần duy nhất.
+    if (Platform.OS === 'android' && Number(Platform.Version) >= 31) {
+      try {
+        await Linking.sendIntent('android.settings.REQUEST_SCHEDULE_EXACT_ALARM');
+      } catch { /* máy không hỗ trợ intent này (Android <12) — bỏ qua */ }
     }
 
     return true;
@@ -394,7 +424,7 @@ export default function DashboardScreen({ token, onLogout }) {
         setStreakRecoveryUsed(true);
         await AsyncStorage.setItem(STORAGE_STREAK_RECOVERY_USED, thisMonth);
         setShowStreakRecovery(false);
-        Alert.alert('Streak đã phục hồi! 🔥', `Tuyệt vời! Streak của bạn vẫn là ${data.streak} ngày. Nhớ uống nước hôm nay nha!`);
+        Alert.alert('Streak đã phục hồi! 🔥', `May chưa! streak vẫn là 🔥${data.streak} ngày. Nhớ uống nước hôm nay nha!`);
       } else {
         Alert.alert('Không thể phục hồi', 'Không đủ điều kiện để phục hồi streak lần này.');
         setShowStreakRecovery(false);
@@ -500,12 +530,35 @@ export default function DashboardScreen({ token, onLogout }) {
     return styles.glassShape;
   }, [containerType]);
 
+  // ── Bottom padding: CHỈ tính động cho Android ────────────────────────────
+  // iOS giữ nguyên số cố định như code gốc (110 / 150 / 125) — không đổi gì.
+  // Android: insets.bottom dao động rất nhiều giữa các hãng/kiểu điều hướng
+  // (0 / ~24dp gesture pill / ~48dp nút bấm cứng) nên tính theo insets thực
+  // tế của từng máy thay vì một số cố định chỉ đúng cho một số thiết bị.
+  const IS_ANDROID = Platform.OS === 'android';
+  const dockClearance = IS_ANDROID ? insets.bottom + 62 + (isShortScreen ? 40 : 55) : null;
+
   // ── Shared style props ────────────────────────────────────────────────────
-  const profileContentStyle = styles.profileContent;
-  const roadmapContentStyle = styles.roadmapContent;
+  const profileContentStyle = useMemo(
+    () => IS_ANDROID
+      ? [styles.profileContent, { paddingBottom: dockClearance + 30 }]
+      : [styles.profileContent, { paddingBottom: 110 }], // iOS — giữ nguyên
+    [IS_ANDROID, dockClearance]
+  );
+  const roadmapContentStyle = useMemo(
+    () => IS_ANDROID
+      ? [styles.roadmapContent, { paddingBottom: dockClearance + 65 }]
+      : [styles.roadmapContent, { paddingBottom: 150 }], // iOS — giữ nguyên
+    [IS_ANDROID, dockClearance]
+  );
 
   // ── Dock width ────────────────────────────────────────────────────────────
-  const dockWidth = memberTier === 'Em bé của admin' ? 320 : 280;
+  // iOS: giữ nguyên 280/320 cố định như cũ.
+  // Android: giới hạn theo screenWidth vì màn hình hẹp (~320-340dp, phổ biến
+  // ở phân khúc giá rẻ) có thể khiến dock tràn ra ngoài hoặc sát mép.
+  const baseDockWidth = memberTier === 'Em bé của Bình' ? 320 : 280;
+  const dockWidth = IS_ANDROID ? Math.min(baseDockWidth, screenWidth - 32) : baseDockWidth;
+
 
   // ─────────────────────────────────────────────────────────────────────────
   return (
@@ -514,7 +567,7 @@ export default function DashboardScreen({ token, onLogout }) {
 
         {/* ── HOME TAB ── */}
         {activeTab === 'home' && (
-          <View style={styles.scrollContent}>
+          <View style={[styles.scrollContent, { paddingBottom: IS_ANDROID ? dockClearance + 20 : 125 }]}>
             <HeaderComponent
               currentWater={currentWater}
               goalMl={goalMl}
@@ -534,7 +587,7 @@ export default function DashboardScreen({ token, onLogout }) {
                   <Ionicons name="flame" size={22} color="#f97316" />
                   <View style={{ marginLeft: 10 }}>
                     <Text style={styles.recoveryBannerTitle}>Phục hồi streak!</Text>
-                    <Text style={styles.recoveryBannerSub}>Bạn có 1 cơ hội cứu chuỗi {streak} ngày</Text>
+                    <Text style={styles.recoveryBannerSub}>Em có 1 cơ hội cứu chuỗi {streak} ngày</Text>
                   </View>
                 </View>
                 <Ionicons name="chevron-forward" size={20} color="#f97316" />
@@ -556,6 +609,14 @@ export default function DashboardScreen({ token, onLogout }) {
             selectedGiftModal={selectedGiftModal}
             setSelectedGiftModal={setSelectedGiftModal}
             roadmapContent={roadmapContentStyle}
+          />
+        )}
+
+        {/* ── THEO DÕI TAB ── */}
+        {activeTab === 'theodoi' && userRole === 'embe' && (
+          <TheoDoiTab
+            token={token}
+            containerStyle={profileContentStyle}
           />
         )}
 
@@ -596,12 +657,15 @@ export default function DashboardScreen({ token, onLogout }) {
       {/* ── DOCK ── */}
       <View style={[styles.dockWrapper, { bottom: Math.max(insets.bottom, 10) }]}>
         <View style={[styles.appleDock, { backgroundColor: colors.dockBg, shadowColor: colors.dockShadow, width: dockWidth }]}>
-          <DockItem tab="home"          activeTab={activeTab} setActiveTab={setActiveTab} icon="water"         activeIcon="water"         label="Check-in"  activeColor="#0ea5e9" colors={colors} />
-          {memberTier === 'Em bé của admin' && (
-            <DockItem tab="gifts"       activeTab={activeTab} setActiveTab={setActiveTab} icon="gift-outline"  activeIcon="gift"          label="Quà tặng"  activeColor="#f43f5e" colors={colors} />
+          <DockItem tab="home"          activeTab={activeTab} setActiveTab={setActiveTab} icon="water"         activeIcon="water"         label="Check-in"  activeColor="#0ea5e9" colors={colors} compact={isCompactWidth} />
+          {userRole === 'embe' && (
+            <DockItem tab="theodoi"     activeTab={activeTab} setActiveTab={setActiveTab} icon="eye-outline"   activeIcon="eye"           label="Theo dõi" activeColor="#10b981" colors={colors} compact={isCompactWidth} />
           )}
-          <DockItem tab="notifications" activeTab={activeTab} setActiveTab={setActiveTab} icon="notifications-outline" activeIcon="notifications" label="Nhắc nhở" activeColor="#0ea5e9" colors={colors} />
-          <DockItem tab="profile"       activeTab={activeTab} setActiveTab={setActiveTab} icon="person-outline" activeIcon="person"        label="Tôi"       activeColor="#0ea5e9" colors={colors} />
+          {memberTier === 'Em bé của Bình' && (
+            <DockItem tab="gifts"       activeTab={activeTab} setActiveTab={setActiveTab} icon="gift-outline"  activeIcon="gift"          label="Quà tặng"  activeColor="#f43f5e" colors={colors} compact={isCompactWidth} />
+          )}
+          <DockItem tab="notifications" activeTab={activeTab} setActiveTab={setActiveTab} icon="notifications-outline" activeIcon="notifications" label="Nhắc nhở" activeColor="#0ea5e9" colors={colors} compact={isCompactWidth} />
+          <DockItem tab="profile"       activeTab={activeTab} setActiveTab={setActiveTab} icon="person-outline" activeIcon="person"        label="Tôi"       activeColor="#0ea5e9" colors={colors} compact={isCompactWidth} />
         </View>
       </View>
 
@@ -612,9 +676,9 @@ export default function DashboardScreen({ token, onLogout }) {
             <Ionicons name="flame" size={56} color="#f97316" style={{ marginBottom: 8 }} />
             <Text style={[styles.recoveryModalTitle, { color: colors.text }]}>Phục hồi Streak 🔥</Text>
             <Text style={[styles.recoveryModalBody, { color: colors.textMuted }]}>
-              Bạn đã bỏ lỡ hôm qua nhưng vẫn còn 1 cơ hội phục hồi chuỗi{' '}
+              Đã bỏ lỡ hôm qua nhưng vẫn còn 1 cơ hội phục hồi chuỗi{' '}
               <Text style={{ fontWeight: '800', color: '#f97316' }}>{streak} ngày</Text> của mình.{'\n\n'}
-              Mỗi tháng chỉ dùng được 1 lần — hãy dùng thật thông minh nhé! Sau khi phục hồi, nhớ uống đủ nước hôm nay để giữ streak!
+              Mỗi tháng chỉ dùng được 1 lần — Sau khi phục hồi, nhớ uống đủ nước hôm nay để giữ streak!
             </Text>
             <View style={{ flexDirection: 'row', gap: 12, width: '100%', marginTop: 20 }}>
               <TouchableOpacity
@@ -639,7 +703,7 @@ export default function DashboardScreen({ token, onLogout }) {
         <View style={styles.cameraOverlay}>
           <View style={[styles.miniCamContainer, { backgroundColor: colors.card }]}>
             <Text style={[styles.miniCamTitle, { color: colors.text }]}>Chụp ảnh để bắt đầu kiểm tra</Text>
-            <View style={styles.cameraFrame}>
+            <View style={[styles.cameraFrame, IS_ANDROID && { width: Math.min(280, screenWidth * 0.72, screenHeight * 0.42) }]}>
               <CameraView style={styles.cameraView} facing="back" flash={flash} enableTorch={flash === 'on'} ref={cameraRef} zoom={0} />
             </View>
             <View style={styles.actionRow}>
@@ -669,7 +733,7 @@ export default function DashboardScreen({ token, onLogout }) {
               {selectedVolume} <Text style={{ fontSize: 18, fontWeight: '600' }}>/ {maxVolume} ml</Text>
             </Text>
 
-            <View style={styles.interactiveArea}>
+            <View style={[styles.interactiveArea, IS_ANDROID && isShortScreen && { height: 190, marginBottom: 12 }]}>
               <View style={styles.glassWrapper}>
                 {containerType === 'thermos' && (
                   <View style={styles.thermosTopArea}>
@@ -714,12 +778,18 @@ export default function DashboardScreen({ token, onLogout }) {
 }
 
 // ─── Dock item tách riêng + memo ─────────────────────────────────────────────
-const DockItem = memo(function DockItem({ tab, activeTab, setActiveTab, icon, activeIcon, label, activeColor, colors }) {
+const DockItem = memo(function DockItem({ tab, activeTab, setActiveTab, icon, activeIcon, label, activeColor, colors, compact }) {
   const isActive = activeTab === tab;
   return (
     <TouchableOpacity style={styles.dockItem} activeOpacity={0.7} onPress={() => setActiveTab(tab)}>
-      <Ionicons name={isActive ? activeIcon : icon} size={24} color={isActive ? activeColor : colors.textMuted} />
-      <Text style={[styles.dockText, { color: isActive ? activeColor : colors.textMuted }]}>{label}</Text>
+      <Ionicons name={isActive ? activeIcon : icon} size={compact ? 21 : 24} color={isActive ? activeColor : colors.textMuted} />
+      <Text
+        style={[styles.dockText, compact && { fontSize: 9.5 }, { color: isActive ? activeColor : colors.textMuted }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 });
@@ -727,18 +797,18 @@ const DockItem = memo(function DockItem({ tab, activeTab, setActiveTab, icon, ac
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container:       { flex: 1 },
-  scrollContent:   { paddingHorizontal: 16, paddingBottom: 125, paddingTop: 2, flex: 1 }, // Giữ nguyên Tab Check-in
-  
+  // paddingBottom giờ được ghép động (xem dockClearance) để tự thích ứng
+  // với insets thực tế của từng máy Android thay vì số cố định.
+  scrollContent:   { paddingHorizontal: 16, paddingTop: 2, flex: 1 },
+
   // Điều chỉnh riêng cho Android tại các Tab còn lại để thu nhỏ chiều cao phần tử
-  profileContent:  { 
-    paddingHorizontal: 20, 
-    paddingBottom: Platform.OS === 'android' ? 95 : 110, 
-    paddingTop: Platform.OS === 'android' ? 12 : 20 
+  profileContent:  {
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 12 : 20,
   },
-  roadmapContent:  { 
-    paddingHorizontal: 20, 
-    paddingBottom: Platform.OS === 'android' ? 130 : 150, 
-    paddingTop: Platform.OS === 'android' ? 12 : 20 
+  roadmapContent:  {
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'android' ? 12 : 20,
   },
 
   // Dock

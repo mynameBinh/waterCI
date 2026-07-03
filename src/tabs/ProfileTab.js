@@ -27,7 +27,7 @@ const ProfileTab = memo(function ProfileTab({
       <View style={[styles.settingsCard, { backgroundColor: colors.card, shadowColor: colors.dockShadow }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Mục tiêu sức khỏe</Text>
         <Text style={styles.sectionSubtitle}>
-          Dung tích nước cần uống mỗi ngày (Chỉ Admin mới có quyền điều chỉnh).
+          Dung tích nước cần uống mỗi ngày (Khom có quyền điều chỉnh, để tránh ăn gian).
         </Text>
         <View style={styles.goalRow}>
           <View style={styles.rowLeft}>

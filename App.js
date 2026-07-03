@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import * as NavigationBar from 'expo-navigation-bar';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import AuthScreen from './src/screen/AuthScreen';
@@ -8,10 +9,45 @@ import DashboardScreen from './src/screen/DashboardScreen';
 // 👇 Import bộ não Theme
 import { ThemeProvider } from './src/context/ThemeContext';
 
+// ─── Android: thanh điều hướng tự ẩn (sticky-immersive) ─────────────────────
+// Áp dụng ở gốc app để mọi màn hình (Auth, Loading, Admin, Dashboard) đều có
+// hành vi giống nhau, giống các app phổ biến (YouTube, TikTok, Instagram...).
+// Lưu ý: `setPositionAsync` / `setBackgroundColorAsync` đã bị Android
+// edge-to-edge (bắt buộc từ Android 15+) vô hiệu hoá nên không dùng nữa —
+// chỉ còn `setVisibilityAsync` + `setStyle` là còn hoạt động thực sự.
+// Với máy dùng gesture-navigation (đa số máy đời mới), hệ điều hành đã tự ẩn
+// sẵn thanh điều hướng, API này chỉ có tác dụng rõ với máy dùng 3-button nav.
+function useAndroidAutoHideNavBar() {
+  const hideTimer = useRef(null);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    NavigationBar.setVisibilityAsync('hidden');
+    NavigationBar.setStyle('dark');
+
+    const sub = NavigationBar.addVisibilityListener(({ visibility }) => {
+      if (visibility === 'visible') {
+        clearTimeout(hideTimer.current);
+        hideTimer.current = setTimeout(() => {
+          NavigationBar.setVisibilityAsync('hidden');
+        }, 2500);
+      }
+    });
+
+    return () => {
+      sub.remove();
+      clearTimeout(hideTimer.current);
+    };
+  }, []);
+}
+
 export default function App() {
   const [token, setToken]       = useState(null);
   const [role, setRole]         = useState(null);
   const [isReady, setIsReady]   = useState(false);
+
+  useAndroidAutoHideNavBar();
 
   const checkTokenRole = (userToken) => {
     try {

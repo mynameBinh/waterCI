@@ -8,7 +8,7 @@ const IS_ANDROID      = Platform.OS === 'android';
 const MAX_LIST_HEIGHT = IS_ANDROID ? 200 : 240;
 const ITEM_PADDING    = IS_ANDROID ? 13  : 16;
 const ITEM_MARGIN_B   = IS_ANDROID ? 8   : 12;
-const ICON_BOX        = IS_ANDROID ? 30  : 36;
+const ICON_BOX        = IS_ANDROID ? 36  : 36;
 const FONT_TIME       = IS_ANDROID ? 13  : 15;
 const FONT_VOL        = IS_ANDROID ? 14  : 16;
 const TITLE_SIZE      = IS_ANDROID ? 16  : 18;
