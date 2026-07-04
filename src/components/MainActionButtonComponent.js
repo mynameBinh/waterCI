@@ -96,7 +96,7 @@ const MainActionButtonComponent = memo(function MainActionButtonComponent({ onOp
           ]}
         />
 
-        <TouchableOpacity activeOpacity={0.8} onPress={onOpen} disabled={disabled} style={styles.btnShadow}>
+        <TouchableOpacity activeOpacity={1} onPress={onOpen} disabled={disabled} style={styles.btnShadow}>
           <LinearGradient
             colors={disabled ? ['#cbd5e1', '#94a3b8'] : ['#67D8F5', '#0EA5E9']}
             style={[styles.button, { width: BTN_SIZE, height: BTN_SIZE, borderRadius: BTN_SIZE / 2 }]}

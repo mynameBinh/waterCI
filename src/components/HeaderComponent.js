@@ -106,7 +106,7 @@ export default function HeaderComponent({ currentWater, goalMl, username, streak
       <View style={styles.greetingRow}>
         <View>
           <Text style={[styles.greetingText, { color: colors.textMuted }]}>Xin chào,</Text>
-          <Text style={[styles.usernameText, { color: colors.text }]}>{username}</Text>
+          <Text style={[styles.usernameText, { color: colors.text}]}>{username}</Text>
         </View>
 
         <TouchableOpacity

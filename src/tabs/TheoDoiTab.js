@@ -116,7 +116,7 @@ export default function TheoDoiTab({ token, containerStyle }) {
     date:     c.date,
     imageUrl: c.image_url ? `${API_BASE}${c.image_url}` : null,
   }));
-  const totalCheckinsToday = targetInfo?.total_checkins_today ?? 0;
+  const totalMlToday = checkins.reduce((sum, c) => sum + (c.volume || 0), 0);
   const streak = targetInfo?.streak ?? 0;
 
   const renderItem = ({ item }) => (
@@ -175,8 +175,8 @@ export default function TheoDoiTab({ token, containerStyle }) {
           <View style={styles.statsRow}>
             <View style={[styles.statCard, { backgroundColor: colors.card }]}>
               <Ionicons name="water" size={22} color="#0ea5e9" />
-              <Text style={[styles.statValue, { color: colors.text }]}>{totalCheckinsToday}</Text>
-              <Text style={[styles.statLabel, { color: colors.textMuted }]}>Lần uống hôm nay</Text>
+              <Text style={[styles.statValue, { color: colors.text }]}>{totalMlToday}ml</Text>
+              <Text style={[styles.statLabel, { color: colors.textMuted }]}>Tổng ml hôm nay</Text>
             </View>
             <View style={[styles.statCard, { backgroundColor: colors.card }]}>
               <Ionicons name="flame" size={22} color="#f97316" />

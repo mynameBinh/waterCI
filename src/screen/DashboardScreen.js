@@ -3,11 +3,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Camera, CameraView } from 'expo-camera';
 import Constants from 'expo-constants';
 import * as Device from 'expo-device';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Notifications from 'expo-notifications';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Linking,
   Modal,
   PanResponder,
@@ -42,9 +44,15 @@ const STORAGE_STREAK_RECOVERY_USED = 'streak_recovery_used_month';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
+    // shouldShowAlert bị deprecate ở các bản expo-notifications mới (SDK 50+),
+    // thay bằng shouldShowBanner/shouldShowList — nếu chỉ set shouldShowAlert,
+    // thông báo có thể KHÔNG hiện banner khi app đang mở trên Android. Set cả
+    // 2 loại field để tương thích với mọi phiên bản.
+    shouldShowAlert:  true,
+    shouldShowBanner: true,
+    shouldShowList:   true,
+    shouldPlaySound:  true,
+    shouldSetBadge:   false,
   }),
 });
 
@@ -77,6 +85,9 @@ export default function DashboardScreen({ token, onLogout }) {
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTab,       setActiveTab]       = useState('home');
+  // ── Hiệu ứng chuyển tab: fade + trượt nhẹ mỗi khi activeTab đổi ──────────
+  const tabFadeAnim  = useRef(new Animated.Value(1)).current;
+  const tabSlideAnim = useRef(new Animated.Value(0)).current;
   const [currentWater,    setCurrentWater]    = useState(0);
   const [goalMl,          setGoalMl]          = useState(1800);
   const [username,        setUsername]        = useState('Đang tải...');
@@ -89,12 +100,16 @@ export default function DashboardScreen({ token, onLogout }) {
   const [selectedGiftModal, setSelectedGiftModal] = useState(null);
   const [showStreakRecovery, setShowStreakRecovery] = useState(false);
   const [streakRecoveryUsed, setStreakRecoveryUsed] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false); // nhắc nhở nay nằm trong tab "Tôi"
 
   // Camera / AI
   const [aiLoading,       setAiLoading]       = useState(false);
   const [showMiniCam,     setShowMiniCam]     = useState(false);
   const [flash,           setFlash]           = useState('off');
+  const [camZoom,         setCamZoom]         = useState(0.2); // 0.2 = camera 1x (chuẩn iPhone 3 mắt)
   const cameraRef = useRef(null);
+  const camZoomRef    = useRef(0.2);  // giá trị zoom mới nhất, dùng trong PanResponder
+  const zoomStartRef  = useRef(0.2);  // giá trị zoom tại thời điểm bắt đầu vuốt
 
   // Volume modal
   const [showVolumeModal, setShowVolumeModal] = useState(false);
@@ -144,6 +159,36 @@ export default function DashboardScreen({ token, onLogout }) {
     })
   ).current;
 
+  // ── Xử lý token hết hạn / không hợp lệ (401) ─────────────────────────────
+  // sessionExpiredRef đảm bảo chỉ hiện Alert 1 lần dù nhiều request 401 cùng lúc
+  const sessionExpiredRef = useRef(false);
+
+  const handleSessionExpired = useCallback(() => {
+    if (sessionExpiredRef.current) return;
+    sessionExpiredRef.current = true;
+    Alert.alert(
+      'Phiên đăng nhập đã hết hạn',
+      'Vui lòng đăng nhập lại để tiếp tục sử dụng.',
+      [{ text: 'Đăng nhập lại', onPress: () => onLogout() }],
+      { cancelable: false }
+    );
+  }, [onLogout]);
+
+  // authFetch: dùng thay cho fetch() ở MỌI lời gọi API_BASE — tự động phát
+  // hiện token hết hạn/không hợp lệ (401) và đăng xuất ngay thay vì để app
+  // "nằm lì" không nhận được dữ liệu mà không rõ lý do.
+  const authFetch = useCallback(async (url, options) => {
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+      handleSessionExpired();
+    }
+    return res;
+  }, [handleSessionExpired]);
+
+  useEffect(() => {
+    sessionExpiredRef.current = false;
+  }, [token]);
+
   // ── Load dữ liệu ban đầu ─────────────────────────────────────────────────
   useEffect(() => {
     if (!token) return;
@@ -158,7 +203,7 @@ export default function DashboardScreen({ token, onLogout }) {
       const headers = { Authorization: `Bearer ${token}` };
 
       // 1. Load thông tin user (độc lập)
-      fetch(`${API_BASE}/api/me`, { headers })
+      authFetch(`${API_BASE}/api/me`, { headers })
         .then(res => { if (res.ok) return res.json(); throw new Error(); })
         .then(me => {
           setGoalMl(me.daily_goal);
@@ -167,7 +212,7 @@ export default function DashboardScreen({ token, onLogout }) {
         .catch(() => {}); // lỗi mạng thì bỏ qua, giữ nguyên state
 
       // 2. Load lịch sử (độc lập)
-      fetch(`${API_BASE}/api/history`, { headers })
+      authFetch(`${API_BASE}/api/history`, { headers })
         .then(res => { if (res.ok) return res.json(); throw new Error(); })
         .then(hData => {
           setHistory(hData.map(item => ({
@@ -181,7 +226,7 @@ export default function DashboardScreen({ token, onLogout }) {
         .catch(() => {});
 
       // 3. Load thông tin streak (độc lập)
-      fetch(`${API_BASE}/api/streak`, { headers })
+      authFetch(`${API_BASE}/api/streak`, { headers })
         .then(res => { if (res.ok) return res.json(); throw new Error(); })
         .then(st => {
           setStreak(st.streak);
@@ -190,7 +235,7 @@ export default function DashboardScreen({ token, onLogout }) {
         .catch(() => {});
 
       // 4. Load thông tin quà tặng (độc lập)
-      fetch(`${API_BASE}/api/gifts`, { headers })
+      authFetch(`${API_BASE}/api/gifts`, { headers })
         .then(res => { if (res.ok) return res.json(); throw new Error(); })
         .then(data => setGifts(data))
         .catch(() => {});
@@ -236,12 +281,12 @@ export default function DashboardScreen({ token, onLogout }) {
 
     loadData();
     restoreNotificationSettings();
-  }, [token]);
+  }, [token, authFetch]);
 
   // ── Notification listeners ────────────────────────────────────────────────
   useEffect(() => {
     const recvSub = Notifications.addNotificationReceivedListener(() => {});
-    const tapSub  = Notifications.addNotificationResponseReceivedListener(() => setActiveTab('notifications'));
+    const tapSub  = Notifications.addNotificationResponseReceivedListener(() => setShowNotificationsModal(true));
     return () => { recvSub.remove(); tapSub.remove(); };
   }, []);
 
@@ -330,7 +375,7 @@ export default function DashboardScreen({ token, onLogout }) {
   const updatePushTokenToBackend = useCallback(async (pushToken) => {
     if (pushToken === null || pushToken === undefined) return; // Chỉ skip khi chưa từng có token (Expo Go)
     try {
-      await fetch(`${API_BASE}/api/users/update-push-token`, {
+      await authFetch(`${API_BASE}/api/users/update-push-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ push_token: pushToken }), // '' khi tắt, token thật khi bật
@@ -413,7 +458,7 @@ export default function DashboardScreen({ token, onLogout }) {
   const handleStreakRecovery = useCallback(async () => {
     const thisMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
     try {
-      const res = await fetch(`${API_BASE}/api/streak/recover`, {
+      const res = await authFetch(`${API_BASE}/api/streak/recover`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       });
@@ -439,6 +484,7 @@ export default function DashboardScreen({ token, onLogout }) {
     const { status } = await Camera.requestCameraPermissionsAsync();
     if (status !== 'granted') { Alert.alert('Quyền truy cập', 'Cần cấp quyền Camera nhé!'); return; }
     setFlash('off');
+    setCamZoom(0.2); // luôn mở camera ở mức 1x mặc định
     setShowMiniCam(true);
   }, []);
 
@@ -453,12 +499,38 @@ export default function DashboardScreen({ token, onLogout }) {
     } catch { setAiLoading(false); }
   }, [aiLoading]);
 
+  // Vuốt dọc trên khung camera để zoom (giống thao tác camera gốc của điện
+  // thoại) — không có nút zoom, chỉ dùng cử chỉ. Vuốt lên = zoom in, vuốt
+  // xuống = zoom out. Zoom được giới hạn trong khoảng [0, 1] (thang zoom của
+  // expo-camera), mặc định 0.2 tương ứng camera 1x.
+  const ZOOM_MIN = 0;
+  const ZOOM_MAX = 1;
+  const ZOOM_SWIPE_SENSITIVITY = 400; // càng lớn thì vuốt càng "chậm" (mượt hơn)
+
+  useEffect(() => { camZoomRef.current = camZoom; }, [camZoom]);
+
+  const cameraPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_evt, gestureState) =>
+        Math.abs(gestureState.dy) > Math.abs(gestureState.dx) && Math.abs(gestureState.dy) > 4,
+      onPanResponderGrant: () => {
+        zoomStartRef.current = camZoomRef.current;
+      },
+      onPanResponderMove: (_evt, gestureState) => {
+        const delta = -gestureState.dy / ZOOM_SWIPE_SENSITIVITY;
+        const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomStartRef.current + delta));
+        setCamZoom(next);
+      },
+    })
+  ).current;
+
   const submitImage = useCallback(async (uri) => {
     setAiLoading(true);
     try {
       const formData = new FormData();
       formData.append('image', { uri, name: 'photo.jpg', type: 'image/jpeg' });
-      const res = await fetch(`${API_BASE}/api/checkin`, {
+      const res = await authFetch(`${API_BASE}/api/checkin`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -491,7 +563,7 @@ export default function DashboardScreen({ token, onLogout }) {
 
     // Gửi volume thực lên backend — lưu DB với đúng số ml user đã chọn
     try {
-      const res = await fetch(`${API_BASE}/api/checkin/confirm`, {
+      const res = await authFetch(`${API_BASE}/api/checkin/confirm`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ volume_ml: confirmedVol, image_url: pendingImageUrl.current }),
@@ -552,6 +624,23 @@ export default function DashboardScreen({ token, onLogout }) {
     [IS_ANDROID, dockClearance]
   );
 
+  useEffect(() => {
+    tabFadeAnim.setValue(0);
+    tabSlideAnim.setValue(10);
+    Animated.parallel([
+      Animated.timing(tabFadeAnim, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+      Animated.timing(tabSlideAnim, {
+        toValue: 0,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [activeTab]);
+
   // ── Dock width ────────────────────────────────────────────────────────────
   // iOS: giữ nguyên 280/320 cố định như cũ.
   // Android: giới hạn theo screenWidth vì màn hình hẹp (~320-340dp, phổ biến
@@ -566,7 +655,12 @@ export default function DashboardScreen({ token, onLogout }) {
       <View style={{ flex: 1, paddingTop: insets.top, paddingBottom: insets.bottom }}>
 
         {/* ── HOME TAB ── */}
-        {activeTab === 'home' && (
+        <Animated.View
+          style={[
+            { flex: 1, opacity: tabFadeAnim, transform: [{ translateY: tabSlideAnim }] },
+            activeTab !== 'home' && styles.hiddenTab,
+          ]}
+        >
           <View style={[styles.scrollContent, { paddingBottom: IS_ANDROID ? dockClearance + 20 : 125 }]}>
             <HeaderComponent
               currentWater={currentWater}
@@ -599,10 +693,15 @@ export default function DashboardScreen({ token, onLogout }) {
             </View>
             <HistoryComponent history={history} />
           </View>
-        )}
+        </Animated.View>
 
         {/* ── GIFTS TAB ── */}
-        {activeTab === 'gifts' && (
+        <Animated.View
+          style={[
+            { flex: 1, opacity: tabFadeAnim, transform: [{ translateY: tabSlideAnim }] },
+            activeTab !== 'gifts' && styles.hiddenTab,
+          ]}
+        >
           <RoadmapTab
             streak={streak}
             gifts={gifts}
@@ -610,18 +709,54 @@ export default function DashboardScreen({ token, onLogout }) {
             setSelectedGiftModal={setSelectedGiftModal}
             roadmapContent={roadmapContentStyle}
           />
-        )}
+        </Animated.View>
 
         {/* ── THEO DÕI TAB ── */}
-        {activeTab === 'theodoi' && userRole === 'embe' && (
-          <TheoDoiTab
-            token={token}
-            containerStyle={profileContentStyle}
-          />
+        {userRole === 'embe' && (
+          <Animated.View
+            style={[
+              { flex: 1, opacity: tabFadeAnim, transform: [{ translateY: tabSlideAnim }] },
+              activeTab !== 'theodoi' && styles.hiddenTab,
+            ]}
+          >
+            <TheoDoiTab
+              token={token}
+              containerStyle={profileContentStyle}
+            />
+          </Animated.View>
         )}
 
-        {/* ── NOTIFICATIONS TAB ── */}
-        {activeTab === 'notifications' && (
+        {/* ── PROFILE TAB ── */}
+        <Animated.View
+          style={[
+            { flex: 1, opacity: tabFadeAnim, transform: [{ translateY: tabSlideAnim }] },
+            activeTab !== 'profile' && styles.hiddenTab,
+          ]}
+        >
+          <ProfileTab
+            username={username}
+            memberTier={memberTier}
+            goalMl={goalMl}
+            onLogout={handleLogoutPrompt}
+            profileContent={profileContentStyle}
+            isPushEnabled={isPushEnabled}
+            reminderTimesCount={selectedTimes.length}
+            onOpenNotifications={() => setShowNotificationsModal(true)}
+          />
+        </Animated.View>
+      </View>
+
+      {/* ── MODAL CÀI ĐẶT NHẮC NHỞ (chuyển từ tab riêng sang đây) ── */}
+      <Modal visible={showNotificationsModal} animationType="slide" onRequestClose={() => setShowNotificationsModal(false)}>
+        <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }}>
+          <View style={[styles.notifModalHeader, { borderBottomColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setShowNotificationsModal(false)} style={styles.notifModalCloseBtn}>
+              <Ionicons name="chevron-back" size={26} color={colors.text} />
+            </TouchableOpacity>
+            <Text style={[styles.notifModalTitle, { color: colors.text }]}>Nhắc nhở</Text>
+            <View style={{ width: 26 }} />
+          </View>
+
           <NotificationsTab
             isPushEnabled={isPushEnabled}
             onTogglePush={handleTogglePush}
@@ -640,22 +775,11 @@ export default function DashboardScreen({ token, onLogout }) {
             onAddCustomTime={handleAddCustomTime}
             profileContent={profileContentStyle}
           />
-        )}
-
-        {/* ── PROFILE TAB ── */}
-        {activeTab === 'profile' && (
-          <ProfileTab
-            username={username}
-            memberTier={memberTier}
-            goalMl={goalMl}
-            onLogout={handleLogoutPrompt}
-            profileContent={profileContentStyle}
-          />
-        )}
-      </View>
+        </View>
+      </Modal>
 
       {/* ── DOCK ── */}
-      <View style={[styles.dockWrapper, { bottom: Math.max(insets.bottom, 10) }]}>
+      <View style={[styles.dockWrapper, { bottom: IS_ANDROID ? insets.bottom + 20 : Math.max(insets.bottom, 10) }]}>
         <View style={[styles.appleDock, { backgroundColor: colors.dockBg, shadowColor: colors.dockShadow, width: dockWidth }]}>
           <DockItem tab="home"          activeTab={activeTab} setActiveTab={setActiveTab} icon="water"         activeIcon="water"         label="Check-in"  activeColor="#0ea5e9" colors={colors} compact={isCompactWidth} />
           {userRole === 'embe' && (
@@ -664,7 +788,6 @@ export default function DashboardScreen({ token, onLogout }) {
           {memberTier === 'Em bé của Bình' && (
             <DockItem tab="gifts"       activeTab={activeTab} setActiveTab={setActiveTab} icon="gift-outline"  activeIcon="gift"          label="Quà tặng"  activeColor="#f43f5e" colors={colors} compact={isCompactWidth} />
           )}
-          <DockItem tab="notifications" activeTab={activeTab} setActiveTab={setActiveTab} icon="notifications-outline" activeIcon="notifications" label="Nhắc nhở" activeColor="#0ea5e9" colors={colors} compact={isCompactWidth} />
           <DockItem tab="profile"       activeTab={activeTab} setActiveTab={setActiveTab} icon="person-outline" activeIcon="person"        label="Tôi"       activeColor="#0ea5e9" colors={colors} compact={isCompactWidth} />
         </View>
       </View>
@@ -702,22 +825,64 @@ export default function DashboardScreen({ token, onLogout }) {
       {showMiniCam && (
         <View style={styles.cameraOverlay}>
           <View style={[styles.miniCamContainer, { backgroundColor: colors.card }]}>
-            <Text style={[styles.miniCamTitle, { color: colors.text }]}>Chụp ảnh để bắt đầu kiểm tra</Text>
-            <View style={[styles.cameraFrame, IS_ANDROID && { width: Math.min(280, screenWidth * 0.72, screenHeight * 0.42) }]}>
-              <CameraView style={styles.cameraView} facing="back" flash={flash} enableTorch={flash === 'on'} ref={cameraRef} zoom={0} />
+
+            <View style={styles.miniCamTitleRow}>
+              <View style={styles.miniCamTitleIconWrap}>
+                <Ionicons name="camera" size={16} color="#0ea5e9" />
+              </View>
+              <Text style={[styles.miniCamTitle, { color: colors.text }]}>Chụp ảnh để bắt đầu kiểm tra</Text>
             </View>
+            <Text style={[styles.miniCamSubtitle, { color: colors.textMuted }]}>
+              Đặt cốc/chai nước vào giữa khung hình
+            </Text>
+
+            {/* ── Khung camera kiểu viewfinder ── */}
+            <LinearGradient
+              colors={['#67D8F5', '#0EA5E9']}
+              style={[styles.cameraFrameBorder, IS_ANDROID && { width: Math.min(280, screenWidth * 0.72, screenHeight * 0.42) + 6 }]}
+            >
+              <View
+                style={[styles.cameraFrame, IS_ANDROID && { width: Math.min(280, screenWidth * 0.72, screenHeight * 0.42) }]}
+                {...cameraPanResponder.panHandlers}
+              >
+                <CameraView style={styles.cameraView} facing="back" flash={flash} enableTorch={flash === 'on'} ref={cameraRef} zoom={camZoom} />
+
+                {/* Góc ngắm viewfinder */}
+                <View style={[styles.viewfinderCorner, styles.cornerTL]} />
+                <View style={[styles.viewfinderCorner, styles.cornerTR]} />
+                <View style={[styles.viewfinderCorner, styles.cornerBL]} />
+                <View style={[styles.viewfinderCorner, styles.cornerBR]} />
+
+                {/* Badge zoom */}
+                <View style={styles.zoomBadge}>
+                  <Text style={styles.zoomBadgeText}>{(1 + (camZoom - 0.2) * 5).toFixed(1)}x</Text>
+                </View>
+              </View>
+            </LinearGradient>
+
             <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.closeCircle} onPress={() => setShowMiniCam(false)}>
-                <Ionicons name="close" size={22} color="#64748b" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.shutterBtnOuter} onPress={handleTakePicture}>
-                <View style={styles.shutterBtnInner} />
-              </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.flashCircle, flash === 'on' && styles.flashCircleActive]}
+                style={[styles.closeCircle, { backgroundColor: colors.background, borderColor: colors.border }]}
+                onPress={() => setShowMiniCam(false)}
+              >
+                <Ionicons name="close" size={22} color={colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity activeOpacity={0.85} onPress={handleTakePicture} style={styles.shutterBtnShadow}>
+                <LinearGradient colors={['#67D8F5', '#0EA5E9']} style={styles.shutterBtnOuter}>
+                  <View style={styles.shutterBtnInner} />
+                </LinearGradient>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.flashCircle,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  flash === 'on' && styles.flashCircleActive,
+                ]}
                 onPress={() => setFlash(prev => prev === 'off' ? 'on' : 'off')}
               >
-                <Ionicons name={flash === 'on' ? 'flash' : 'flash-off'} size={20} color={flash === 'on' ? '#eab308' : '#64748b'} />
+                <Ionicons name={flash === 'on' ? 'flash' : 'flash-off'} size={20} color={flash === 'on' ? '#eab308' : colors.textMuted} />
               </TouchableOpacity>
             </View>
           </View>
@@ -780,9 +945,31 @@ export default function DashboardScreen({ token, onLogout }) {
 // ─── Dock item tách riêng + memo ─────────────────────────────────────────────
 const DockItem = memo(function DockItem({ tab, activeTab, setActiveTab, icon, activeIcon, label, activeColor, colors, compact }) {
   const isActive = activeTab === tab;
+
+  // ── Hiệu ứng item to hơn + nhô lên khi active ────────────────────────────
+  const scaleAnim = useRef(new Animated.Value(isActive ? 1.18 : 1)).current;
+  const liftAnim  = useRef(new Animated.Value(isActive ? -6 : 0)).current;
+
+  useEffect(() => {
+    Animated.spring(scaleAnim, {
+      toValue: isActive ? 1.18 : 1,
+      useNativeDriver: true,
+      friction: 6,
+      tension: 160,
+    }).start();
+    Animated.spring(liftAnim, {
+      toValue: isActive ? -6 : 0,
+      useNativeDriver: true,
+      friction: 6,
+      tension: 160,
+    }).start();
+  }, [isActive]);
+
   return (
     <TouchableOpacity style={styles.dockItem} activeOpacity={0.7} onPress={() => setActiveTab(tab)}>
-      <Ionicons name={isActive ? activeIcon : icon} size={compact ? 21 : 24} color={isActive ? activeColor : colors.textMuted} />
+      <Animated.View style={{ transform: [{ scale: scaleAnim }, { translateY: liftAnim }] }}>
+        <Ionicons name={isActive ? activeIcon : icon} size={compact ? 21 : 24} color={isActive ? activeColor : colors.textMuted} />
+      </Animated.View>
       <Text
         style={[styles.dockText, compact && { fontSize: 9.5 }, { color: isActive ? activeColor : colors.textMuted }]}
         numberOfLines={1}
@@ -800,6 +987,13 @@ const styles = StyleSheet.create({
   // paddingBottom giờ được ghép động (xem dockClearance) để tự thích ứng
   // với insets thực tế của từng máy Android thay vì số cố định.
   scrollContent:   { paddingHorizontal: 16, paddingTop: 2, flex: 1 },
+  hiddenTab:       { display: 'none' },
+
+  // ── Header modal Nhắc nhở ──────────────────────────────────────────────
+  notifModalHeader:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1 },
+  notifModalCloseBtn:   { padding: 6 },
+  notifModalTitle:      { fontSize: 17, fontWeight: '800' },
+
 
   // Điều chỉnh riêng cho Android tại các Tab còn lại để thu nhỏ chiều cao phần tử
   profileContent:  {
@@ -820,14 +1014,29 @@ const styles = StyleSheet.create({
   // Camera overlay
   cameraOverlay:   { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', alignItems: 'center', zIndex: 999 },
   miniCamContainer: { borderRadius: 32, padding: 24, width: '85%', maxWidth: 340, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 20 }, shadowOpacity: 0.3, shadowRadius: 30, elevation: 15 },
-  miniCamTitle:    { fontSize: 16, fontWeight: '700', marginBottom: 16, letterSpacing: -0.3 },
-  cameraFrame:     { width: 280, aspectRatio: 3 / 4, borderRadius: 24, overflow: 'hidden', backgroundColor: '#000' },
+  miniCamTitleRow:  { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  miniCamTitleIconWrap: { width: 26, height: 26, borderRadius: 13, backgroundColor: '#e0f2fe', justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  miniCamTitle:    { fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
+  miniCamSubtitle: { fontSize: 12.5, marginBottom: 18, marginTop: 2, fontWeight: '500' },
+  cameraFrameBorder: { width: 286, aspectRatio: 3 / 4, borderRadius: 27, padding: 3, marginBottom: 4 },
+  cameraFrame:     { flex: 1, width: 280, aspectRatio: 3 / 4, borderRadius: 24, overflow: 'hidden', backgroundColor: '#000' },
   cameraView:      { flex: 1 },
-  actionRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginTop: 24, paddingHorizontal: 8 },
-  closeCircle:     { width: 46, height: 46, borderRadius: 23, backgroundColor: '#f1f5f9', justifyContent: 'center', alignItems: 'center' },
-  shutterBtnOuter: { width: 72, height: 72, borderRadius: 36, borderWidth: 4, borderColor: '#0ea5e9', justifyContent: 'center', alignItems: 'center' },
-  shutterBtnInner: { width: 54, height: 54, borderRadius: 27, backgroundColor: '#0ea5e9' },
-  flashCircle:     { width: 46, height: 46, borderRadius: 23, backgroundColor: '#f1f5f9', justifyContent: 'center', alignItems: 'center' },
+
+  viewfinderCorner: { position: 'absolute', width: 22, height: 22, borderColor: 'rgba(255,255,255,0.85)' },
+  cornerTL: { top: 10, left: 10, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 8 },
+  cornerTR: { top: 10, right: 10, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 8 },
+  cornerBL: { bottom: 10, left: 10, borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 8 },
+  cornerBR: { bottom: 10, right: 10, borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 8 },
+
+  zoomBadge:       { position: 'absolute', bottom: 12, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  zoomBadgeText:   { color: '#ffffff', fontSize: 12, fontWeight: '700' },
+
+  actionRow:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginTop: 22, paddingHorizontal: 8 },
+  closeCircle:     { width: 46, height: 46, borderRadius: 23, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
+  shutterBtnShadow: { shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 12, elevation: 8 },
+  shutterBtnOuter: { width: 72, height: 72, borderRadius: 36, borderWidth: 4, borderColor: '#e0f2fe', justifyContent: 'center', alignItems: 'center' },
+  shutterBtnInner: { width: 52, height: 52, borderRadius: 26, backgroundColor: '#ffffff' },
+  flashCircle:     { width: 46, height: 46, borderRadius: 23, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
   flashCircleActive: { backgroundColor: '#fef9c3', borderWidth: 1, borderColor: '#fef08a' },
 
   // Volume modal
