@@ -1069,7 +1069,7 @@ const styles = StyleSheet.create({
   knobInner:       { width: 12, height: 12, borderRadius: 6, backgroundColor: '#bae6fd' },
   waterSurfaceLine: { flex: 1, height: 3, backgroundColor: 'rgba(255,255,255,0.8)', borderTopRightRadius: 2, borderBottomRightRadius: 2 },
 
-  confirmWaterBtn: { backgroundColor: '#0ea5e9', width: '100%', paddingVertical: 14, borderRadius: 16, alignItems: 'center', shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
+  confirmWaterBtn: { backgroundColor: '#0ea5e9', width: '100%', paddingVertical: 14, borderRadius: 15, alignItems: 'center', shadowColor: '#0ea5e9', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
   confirmWaterBtnText: { color: '#ffffff', fontSize: 16, fontWeight: '750' },
 
   // Loading overlay
