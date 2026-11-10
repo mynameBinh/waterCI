@@ -14,14 +14,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Xcode mặc định của macOS 26
+      # 2. Setup Xcode
       - name: Setup Xcode
         run: |
           sudo xcodebuild -runFirstLaunch
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      # 3. Setup Node
+      # 3. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -32,18 +32,48 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 5. Check Expo SDK dependencies
+      # 5. Check Expo dependencies
       - name: Check Expo dependencies
         run: npx expo install --check
 
-      # 6. Generate native iOS project nếu chưa có
+      # 6. Generate iOS project if missing
       - name: Generate iOS project
         run: |
           if [ ! -d ios ]; then
             npx expo prebuild --platform ios
           fi
 
-      # 7. Install CocoaPods
+      # 7. Set iOS deployment target
+      - name: Configure iOS Deployment Target
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("ios/Podfile.properties.json")
+
+          if path.exists():
+              data = json.loads(path.read_text())
+          else:
+              data = {}
+
+          data["ios.deploymentTarget"] = "16.4"
+
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps(data, indent=2) + "\n")
+
+          print(path.read_text())
+          PY
+
+          # Update Xcode project deployment target
+          find ios -name "project.pbxproj" -print0 | while IFS= read -r -d '' file; do
+            sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 15\.1;/IPHONEOS_DEPLOYMENT_TARGET = 16.4;/g' "$file"
+          done
+
+          echo "===== DEPLOYMENT TARGET ====="
+          grep -R "IPHONEOS_DEPLOYMENT_TARGET" ios --include="project.pbxproj" || true
+
+      # 8. Install CocoaPods
       - name: Install CocoaPods
         run: |
           cd ios
@@ -51,11 +81,11 @@ jobs:
         env:
           COCOAPODS_DISABLE_STATS: true
 
-      # 8. Export JS bundle
+      # 9. Export Expo bundle
       - name: Export Expo bundle
         run: npx expo export --platform ios
 
-      # 9. Build IPA app
+      # 10. Build iOS unsigned
       - name: Build iOS (Unsigned)
         run: |
           cd ios
@@ -67,16 +97,30 @@ jobs:
             exit 1
           fi
 
-          SCHEME=$(xcodebuild -list -workspace "$WORKSPACE" \
-            | sed -n '/Schemes:/,$p' \
-            | grep -v 'Schemes:' \
-            | sed 's/^[[:space:]]*//' \
-            | head -n 1)
+          echo "===== AVAILABLE SCHEMES ====="
 
-          if [ -z "$SCHEME" ]; then
-            echo "ERROR: Không tìm thấy scheme"
-            exit 1
-          fi
+          SCHEMES_JSON=$(xcodebuild -list -json -workspace "$WORKSPACE")
+
+          SCHEME=$(echo "$SCHEMES_JSON" | python3 -c '
+          import json, sys
+
+          data = json.load(sys.stdin)
+          section = data.get("workspace") or data.get("project")
+          schemes = section.get("schemes", [])
+
+          app_schemes = [
+              s for s in schemes
+              if not s.startswith("Pods-")
+          ]
+
+          print("Available app schemes:", app_schemes, file=sys.stderr)
+
+          if len(app_schemes) != 1:
+              print("ERROR: Không xác định được duy nhất một app scheme", file=sys.stderr)
+              sys.exit(1)
+
+          print(app_schemes[0])
+          ')
 
           echo "Building scheme: $SCHEME"
 
@@ -92,25 +136,46 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             clean build
 
-      # 10. Package IPA
+      # 11. Package unsigned IPA
       - name: Package Unsigned IPA
         run: |
-          APP_DIR="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos"
+          DERIVED_DATA="$RUNNER_TEMP/DerivedData"
+          PRODUCTS_DIR="$DERIVED_DATA/Build/Products"
 
-          APP_PATH=$(find "$APP_DIR" -maxdepth 1 -name "*.app" -print -quit)
+          echo "===== SEARCHING FOR APP ====="
+
+          find "$PRODUCTS_DIR" -type d -name "*.app" -print
+
+          APP_PATH=$(find "$PRODUCTS_DIR" \
+            -type d \
+            -name "*.app" \
+            ! -name "*Tests*.app" \
+            ! -path "*/PlugIns/*" \
+            -print -quit)
 
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: Không tìm thấy file .app"
+
+            echo "===== BUILD PRODUCTS ====="
+            find "$DERIVED_DATA" -maxdepth 5 -print || true
+
             exit 1
           fi
 
+          echo "Found app: $APP_PATH"
+
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
+
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
 
           cd "$RUNNER_TEMP/ipa"
+
           zip -r "$GITHUB_WORKSPACE/expo_unsigned.ipa" Payload
 
-      # 11. Upload artifact
+          echo "===== IPA CREATED ====="
+          ls -lh "$GITHUB_WORKSPACE/expo_unsigned.ipa"
+
+      # 12. Upload IPA
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
