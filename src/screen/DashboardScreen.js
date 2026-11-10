@@ -24,6 +24,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import AIChatModal from "../components/AIChatModal";
+import FloatingAIButton from "../components/FloatingAIButton";
 import HeaderComponent from "../components/HeaderComponent";
 import HistoryComponent from "../components/HistoryComponent";
 import MainActionButtonComponent from "../components/MainActionButtonComponent";
@@ -156,6 +158,7 @@ export default function DashboardScreen({ token, onLogout }) {
     can_recover: false,
     recoverable_streak: 0,
   });
+  const [showAIChat, setShowAIChat] = useState(false); // khung chat AI (mở từ nút nổi)
   const [showNotificationsModal, setShowNotificationsModal] = useState(false); // nhắc nhở nay nằm trong tab "Tôi"
 
   // Camera / AI
@@ -918,6 +921,48 @@ export default function DashboardScreen({ token, onLogout }) {
     ]);
   }, [onLogout]);
 
+  //hàm thêm mục tiêu
+  const handleCreateTask = useCallback(
+  async (payload) => {
+    const res = await authFetch(`${API_BASE}/api/tasks/mine`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload), // { title, verify_description, target_per_day, repeat }
+    });
+    let data = null;
+    try { data = await res.json(); } catch {}
+    if (!res.ok) {
+      throw new Error(
+        typeof data?.detail === "string" ? data.detail : "Không thêm được mục tiêu.",
+      );
+    }
+    await fetchActiveTask();
+    if (data?.id) setSelectedTaskId(data.id); // chuyển sang mục tiêu vừa thêm
+  },
+  [token, authFetch, fetchActiveTask],
+  );
+
+  // Hàm xoá mục tiêu
+  const handleDeleteTask = useCallback(
+  async (id) => {
+    const res = await authFetch(`${API_BASE}/api/tasks/mine/${id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      let msg = "Không xoá được mục tiêu.";
+      try { msg = (await res.json())?.detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    await fetchActiveTask();
+  },
+  [token, authFetch, fetchActiveTask],
+  );
+
+
   // ── Bottom padding: CHỈ tính động cho Android ────────────────────────────
   // iOS giữ nguyên số cố định như code gốc (110 / 150 / 125) — không đổi gì.
   // Android: insets.bottom dao động rất nhiều giữa các hãng/kiểu điều hướng
@@ -1025,9 +1070,11 @@ export default function DashboardScreen({ token, onLogout }) {
       {activeTask ? (
         <TaskCheckinTab
           tasks={activeTasks}
-          selectedId={activeTask.id}
+          selectedId={activeTask?.id}
           onSelect={setSelectedTaskId}
           onOpenCamera={handleActivationTaskCamera}
+          onCreateTask={handleCreateTask}
+          onDeleteTask={handleDeleteTask}
           disabled={aiLoading}
         />
       ) : (
@@ -1078,6 +1125,7 @@ export default function DashboardScreen({ token, onLogout }) {
       dockClearance,
     ],
   );
+  const handleOpenAIChat = useCallback(() => setShowAIChat(true), []);
   const profileTab = useMemo(
     () => (
     <ProfileTab
@@ -1227,6 +1275,15 @@ export default function DashboardScreen({ token, onLogout }) {
         </Animated.View>
       </View>
 
+      {/* ── KHUNG CHAT AI ── */}
+      <AIChatModal
+        visible={showAIChat}
+        onClose={() => setShowAIChat(false)}
+        token={token}
+        apiBase={API_BASE}
+        authFetch={authFetch}
+      />
+
       {/* ── MODAL CÀI ĐẶT NHẮC NHỞ (chuyển từ tab riêng sang đây) ── */}
       <Modal
         visible={showNotificationsModal}
@@ -1287,6 +1344,9 @@ export default function DashboardScreen({ token, onLogout }) {
           />
         </View>
       </Modal>
+
+      {/* ── NÚT AI NỔI (kéo thả kiểu AssistiveTouch, hiện ở mọi tab) ── */}
+      <FloatingAIButton onPress={handleOpenAIChat} />
 
       {/* ── DOCK ── */}
       <View

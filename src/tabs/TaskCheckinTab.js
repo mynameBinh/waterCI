@@ -3,6 +3,7 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
+    Alert,
     KeyboardAvoidingView,
     Modal,
     Platform,
@@ -355,26 +356,160 @@ const TaskChip = memo(({ t, selected, onPress, colors }) => {
   );
 });
 
-// ─── Nút "+" nhỏ, tinh tế để tự thêm mục tiêu ───
-const AddTaskButton = memo(({ onPress }) => {
+// ─── Pill "x/y mục tiêu": vừa hiện tiến độ, vừa là nút mở form thêm mục tiêu ───
+const TasksPill = memo(({ done, total, onPress }) => {
   const { colors } = useTheme();
+  const tappable = !!onPress;
   return (
     <Pressable
       onPress={onPress}
-      hitSlop={10}
-      accessibilityRole="button"
-      accessibilityLabel="Thêm mục tiêu mới"
+      disabled={!tappable}
+      hitSlop={8}
+      accessibilityRole={tappable ? "button" : undefined}
+      accessibilityLabel={
+        tappable
+          ? `${done}/${total} mục tiêu. Chạm để thêm mục tiêu mới`
+          : undefined
+      }
       style={({ pressed }) => [
-        styles.addBtn,
-        {
-          backgroundColor: `rgba(${colors.primaryRgb},0.12)`,
-          borderColor: `rgba(${colors.primaryRgb},0.35)`,
-        },
-        pressed && { transform: [{ scale: 0.9 }], opacity: 0.8 },
+        styles.summaryPill,
+        { backgroundColor: colors.primarySoft },
+        tappable && { paddingRight: 5 },
+        pressed && tappable && { transform: [{ scale: 0.96 }], opacity: 0.85 },
       ]}
     >
-      <Ionicons name="add" size={18} color={colors.primary} />
+      <Ionicons name="checkmark-done" size={14} color={colors.primary} />
+      <Text style={[styles.summaryText, { color: colors.primary }]}>
+        {done}/{total} mục tiêu
+      </Text>
+      {tappable && (
+        <View style={[styles.pillPlus, { backgroundColor: colors.primary }]}>
+          <Ionicons name="add" size={14} color="#ffffff" />
+        </View>
+      )}
     </Pressable>
+  );
+});
+
+// ─── Nút "+" lớn ở giữa khi chưa có mục tiêu nào (có vòng sóng lan toả) ───
+const EmptyAddButton = memo(({ onPress }) => {
+  const { colors } = useTheme();
+  const ring = useSharedValue(0);
+  useEffect(() => {
+    ring.value = withRepeat(
+      withTiming(1, { duration: 1800, easing: Easing.out(Easing.quad) }),
+      -1,
+      false,
+    );
+    return () => cancelAnimation(ring);
+  }, [ring]);
+  const ringStyle = useAnimatedStyle(() => ({
+    opacity: 0.4 * (1 - ring.value),
+    transform: [{ scale: 1 + 0.55 * ring.value }],
+  }));
+  return (
+    <Animated.View entering={FadeInDown.duration(350)} style={styles.emptyPlusWrap}>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.emptyPlusRing, { backgroundColor: colors.primary }, ringStyle]}
+      />
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel="Thêm mục tiêu mới"
+        style={({ pressed }) => [
+          styles.emptyPlus,
+          {
+            backgroundColor: colors.primarySoft,
+            borderColor: colors.primaryBorder,
+          },
+          pressed && { transform: [{ scale: 0.94 }] },
+        ]}
+      >
+        <Ionicons name="add" size={46} color={colors.primary} />
+      </Pressable>
+    </Animated.View>
+  );
+});
+
+// ─── Dòng mô tả + (Xoá nếu là mục tiêu tự thêm | nhãn "Được giao" nếu do admin giao) ───
+const TaskMetaRow = memo(({ task, onDeleteTask }) => {
+  const { colors } = useTheme();
+  const [deleting, setDeleting] = useState(false);
+  const canDelete = !!task.is_mine && !!onDeleteTask;
+  const assigned = !task.is_mine; // admin / em bé giao: chỉ hoàn thành, không xoá được
+
+  const confirmDelete = () => {
+    if (deleting) return;
+    Alert.alert(
+      "Xoá mục tiêu?",
+      `"${task.title}" và các lượt check-in của mục tiêu này sẽ bị xoá.`,
+      [
+        { text: "Huỷ", style: "cancel" },
+        {
+          text: "Xoá",
+          style: "destructive",
+          onPress: async () => {
+            setDeleting(true);
+            try {
+              await onDeleteTask(task.id);
+            } catch (e) {
+              Alert.alert(
+                "Không xoá được",
+                e?.message || "Thử lại sau nhé.",
+              );
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  if (!task.description && !canDelete && !assigned) return null;
+  return (
+    <View style={styles.metaRow}>
+      <View style={{ flex: 1 }}>
+        {!!task.description && (
+          <Text
+            style={[styles.metaDesc, { color: colors.textMuted }]}
+            numberOfLines={3}
+          >
+            {task.description}
+          </Text>
+        )}
+      </View>
+      {canDelete ? (
+        <Pressable
+          onPress={confirmDelete}
+          disabled={deleting}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Xoá mục tiêu"
+          style={({ pressed }) => [
+            styles.delBtn,
+            pressed && { transform: [{ scale: 0.95 }], opacity: 0.8 },
+          ]}
+        >
+          {deleting ? (
+            <ActivityIndicator size="small" color="#ef4444" />
+          ) : (
+            <>
+              <Ionicons name="trash-outline" size={14} color="#ef4444" />
+              <Text style={styles.delText}>Xoá</Text>
+            </>
+          )}
+        </Pressable>
+      ) : assigned ? (
+        <View style={styles.lockBadge}>
+          <Ionicons name="lock-closed-outline" size={12} color={colors.textMuted} />
+          <Text style={[styles.lockText, { color: colors.textMuted }]}>
+            Được giao
+          </Text>
+        </View>
+      ) : null}
+    </View>
   );
 });
 
@@ -557,7 +692,7 @@ function AddTaskModal({ visible, onClose, onSubmit }) {
   );
 }
 
-// ─── Khi chưa có mục tiêu nào: vẫn cho tự thêm ───
+// ─── Khi chưa có mục tiêu nào: dấu "+" lớn ở giữa để tự thêm ───
 function EmptyTasks({ onCreateTask }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
@@ -570,24 +705,29 @@ function EmptyTasks({ onCreateTask }) {
             {todayLabel()}
           </Text>
         </View>
-        {!!onCreateTask && <AddTaskButton onPress={() => setOpen(true)} />}
       </View>
       <View style={styles.emptyWrap}>
-        <Ionicons name="flag-outline" size={40} color={colors.textMuted} />
+        {onCreateTask ? (
+          <EmptyAddButton onPress={() => setOpen(true)} />
+        ) : (
+          <Ionicons name="flag-outline" size={40} color={colors.textMuted} />
+        )}
         <Text style={[styles.emptyText, { color: colors.textMuted }]}>
           Hôm nay chưa có mục tiêu nào
         </Text>
         {!!onCreateTask && (
           <Text style={[styles.emptyHint, { color: colors.textMuted }]}>
-            Bấm nút + để tự thêm mục tiêu của bạn
+            Chạm dấu + để tự thêm mục tiêu của bạn
           </Text>
         )}
       </View>
-      <AddTaskModal
-        visible={open}
-        onClose={() => setOpen(false)}
-        onSubmit={onCreateTask}
-      />
+      {!!onCreateTask && (
+        <AddTaskModal
+          visible={open}
+          onClose={() => setOpen(false)}
+          onSubmit={onCreateTask}
+        />
+      )}
     </View>
   );
 }
@@ -595,13 +735,15 @@ function EmptyTasks({ onCreateTask }) {
 /**
  * Tab "Mục tiêu" — check-in theo mục tiêu do admin đặt hoặc do chính user tự thêm.
  * Props:
- *  - tasks: [{ id, title, description, target_per_day, done_today, history: [{id, time}] }]
+ *  - tasks: [{ id, title, description, target_per_day, done_today, is_mine, history: [{id, time}] }]
+ *      is_mine = true: mục tiêu do chính user tự thêm -> được xoá. Ngược lại (admin / em bé giao): chỉ hoàn thành.
  *  - selectedId: id mục tiêu đang xem / sẽ chụp ảnh cho
  *  - onSelect(id): đổi mục tiêu đang chọn
  *  - onOpenCamera: mở camera ở chế độ task (cho mục tiêu đang chọn)
  *  - onCreateTask(payload): async, tự thêm mục tiêu. payload = { title, verify_description,
  *      target_per_day, repeat }. Throw Error(message) nếu lỗi để form hiện thông báo.
- *      Không truyền prop này -> ẩn nút "+".
+ *      Không truyền prop này -> ẩn nút thêm. Có mục tiêu -> pill "x/y mục tiêu" chính là nút thêm.
+ *  - onDeleteTask(id): async, xoá mục tiêu tự thêm (DELETE /api/tasks/mine/{id}). Throw Error(message) nếu lỗi.
  *  - disabled: đang xử lý AI
  */
 export default function TaskCheckinTab(props) {
@@ -617,6 +759,7 @@ function TaskCheckinContent({
   onSelect,
   onOpenCamera,
   onCreateTask,
+  onDeleteTask,
   disabled,
 }) {
   const { colors } = useTheme();
@@ -667,23 +810,13 @@ function TaskCheckinContent({
             {todayLabel()}
           </Text>
         </View>
-        {multi && (
-          <View
-            style={[
-              styles.summaryPill,
-              { backgroundColor: colors.primarySoft },
-            ]}
-          >
-            <Ionicons name="checkmark-done" size={14} color={colors.primary} />
-            <Text style={[styles.summaryText, { color: colors.primary }]}>
-              {doneTasks}/{tasks.length} mục tiêu
-            </Text>
-          </View>
-        )}
-        {!!onCreateTask && (
-          <View style={{ marginLeft: multi ? 10 : 0 }}>
-            <AddTaskButton onPress={() => setAddOpen(true)} />
-          </View>
+        {/* Pill "x/y mục tiêu" cũng chính là nút thêm mục tiêu */}
+        {(multi || !!onCreateTask) && (
+          <TasksPill
+            done={doneTasks}
+            total={tasks.length}
+            onPress={onCreateTask ? () => setAddOpen(true) : undefined}
+          />
         )}
       </View>
 
@@ -722,14 +855,7 @@ function TaskCheckinContent({
             shadowColor={colors.dockShadow}
             primary={colors.primary}
           />
-          {!!task.description && (
-            <Text
-              style={[styles.progDesc, { color: colors.textMuted }]}
-              numberOfLines={3}
-            >
-              {task.description}
-            </Text>
-          )}
+          <TaskMetaRow task={task} onDeleteTask={onDeleteTask} />
         </Animated.View>
       </View>
 
@@ -925,7 +1051,64 @@ const styles = StyleSheet.create({
     marginLeft: 5,
   },
 
-  // ── Nút "+" thêm mục tiêu ──
+  pillPlus: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    marginLeft: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // ── Dòng mô tả + Xoá / Được giao ──
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 10,
+    paddingHorizontal: 4,
+  },
+  metaDesc: { fontSize: 13, lineHeight: 19, fontWeight: "500", paddingRight: 10 },
+  delBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 58,
+    height: 28,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(239,68,68,0.10)",
+  },
+  delText: { color: "#ef4444", fontSize: 12, fontWeight: "800", marginLeft: 4 },
+  lockBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    height: 26,
+    borderRadius: 10,
+    paddingHorizontal: 9,
+    backgroundColor: "rgba(148,163,184,0.14)",
+  },
+  lockText: { fontSize: 11.5, fontWeight: "700", marginLeft: 4 },
+
+  // ── Nút "+" lớn ở trạng thái trống ──
+  emptyPlusWrap: {
+    width: 96,
+    height: 96,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  emptyPlusRing: { position: "absolute", width: 88, height: 88, borderRadius: 44 },
+  emptyPlus: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    borderWidth: 2,
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // ── Nút "+" thêm mục tiêu (cũ, không còn dùng) ──
   addBtn: {
     width: 30,
     height: 30,
