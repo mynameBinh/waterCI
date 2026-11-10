@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/icon.png",
-      "bundleIdentifier": "com.tbinh.waterCheckIn"
+      "bundleIdentifier": "com.tbinh.waterCheckIn",
+      "deploymentTarget": "16.4"
     },
     "android": {
       "adaptiveIcon": {
