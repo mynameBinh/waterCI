@@ -2,16 +2,14 @@
   "expo": {
     "name": "Water check-in",
     "slug": "MyFirstApp",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "myfirstapp",
     "userInterfaceStyle": "automatic",
-    "jsEngine": "hermes",
     "ios": {
       "icon": "./assets/icon.png",
-      "bundleIdentifier": "com.tbinh.waterCheckIn",
-      "jsEngine": "hermes"
+      "bundleIdentifier": "com.tbinh.waterCheckIn"
     },
     "android": {
       "adaptiveIcon": {
@@ -20,7 +18,6 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.tbinh.waterCheckIn",
-      "jsEngine": "hermes",
       "permissions": [
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.RECEIVE_BOOT_COMPLETED"
@@ -58,7 +55,11 @@
           "barStyle": "dark",
           "enforceContrast": false
         }
-      ]
+      ],
+      "expo-font",
+      "expo-image",
+      "expo-web-browser",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,
