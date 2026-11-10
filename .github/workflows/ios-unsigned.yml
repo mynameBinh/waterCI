@@ -1,4 +1,3 @@
-
 name: Build Unsigned Expo React Native IPA
 
 on:
@@ -25,7 +24,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: "24"
           cache: npm
 
       # 4. Install dependencies
@@ -86,6 +85,8 @@ jobs:
         run: npx expo export --platform ios
 
       # 10. Build iOS unsigned
+
+      # 10. Build iOS (Unsigned)
       - name: Build iOS (Unsigned)
         run: |
           cd ios
@@ -97,32 +98,25 @@ jobs:
             exit 1
           fi
 
-          echo "===== AVAILABLE SCHEMES ====="
+          # Scheme ứng dụng chính
+          SCHEME="Watercheckin"
 
-          SCHEMES_JSON=$(xcodebuild -list -json -workspace "$WORKSPACE")
+          echo "===== VERIFY SCHEME ====="
+          xcodebuild -list -workspace "$WORKSPACE"
 
-          SCHEME=$(echo "$SCHEMES_JSON" | python3 -c '
+          if ! xcodebuild -list -json -workspace "$WORKSPACE" | \
+            python3 -c '
           import json, sys
-
           data = json.load(sys.stdin)
           section = data.get("workspace") or data.get("project")
           schemes = section.get("schemes", [])
+          sys.exit(0 if "Watercheckin" in schemes else 1)
+          '; then
+            echo "ERROR: Không tìm thấy Scheme Watercheckin"
+            exit 1
+          fi
 
-          app_schemes = [
-              s for s in schemes
-              if not s.startswith("Pods-")
-          ]
-
-          print("Available app schemes:", app_schemes, file=sys.stderr)
-
-          if len(app_schemes) != 1:
-              print("ERROR: Không xác định được duy nhất một app scheme", file=sys.stderr)
-              sys.exit(1)
-
-          print(app_schemes[0])
-          ')
-
-          echo "Building scheme: $SCHEME"
+          echo "===== BUILDING $SCHEME ====="
 
           xcodebuild \
             -workspace "$WORKSPACE" \
@@ -135,6 +129,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             clean build
+
+          echo "===== BUILD COMPLETED ====="
 
       # 11. Package unsigned IPA
       - name: Package Unsigned IPA
