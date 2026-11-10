@@ -1,181 +1,127 @@
-name: Build Unsigned Expo React Native IPA
+name: Build Unsigned Expo React Native IPA (SDK 58)
 
 on:
   push:
   workflow_dispatch:
+    inputs:
+      prebuild:
+        description: "Chạy 'expo prebuild --clean' để sinh lại thư mục ios/ theo SDK 58 (tắt nếu bạn đã tự cập nhật ios/ và commit)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    # Expo SDK 58 cần Xcode >= 26.4 -> dùng runner macOS 26 (Xcode 26.x có sẵn)
     runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CI: "1"
+      COCOAPODS_DISABLE_STATS: "true"
+      EXPO_NO_TELEMETRY: "1"
 
     steps:
-      # 1. Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Xcode
-      - name: Setup Xcode
-        run: |
-          sudo xcodebuild -runFirstLaunch
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
+      # SDK 58 yêu cầu Xcode 26.4 trở lên. '^26.4' = bản 26.x mới nhất (>= 26.4), không nhảy sang Xcode 27.
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "^26.4"
 
-      # 3. Setup Node.js
+      - name: Show Xcode / SDK info
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos
+
+      # Giữ lại: khởi tạo CoreSimulator / platform để tránh lỗi "Platform Not Installed"
+      - name: Initialize Apple CoreSimulator Service
+        run: |
+          xcrun simctl list runtimes
+          sudo xcodebuild -runFirstLaunch
+
+      # SDK 58 (React Native 0.88) cần Node >= 22.13 (nhánh 22), >= 24.3 (nhánh 24) hoặc Node 26
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: npm
 
-      # 4. Install dependencies
-      - name: Install dependencies
-        run: npm ci
-
-      # 5. Check Expo dependencies
-      - name: Check Expo dependencies
-        run: npx expo install --check
-
-      # 6. Generate iOS project if missing
-      - name: Generate iOS project
+      - name: Show tool versions
         run: |
-          if [ ! -d ios ]; then
-            npx expo prebuild --platform ios
+          node -v
+          npm -v
+          pod --version
+
+      - name: Install JavaScript Dependencies
+        run: |
+          if [ -f "yarn.lock" ]; then
+            yarn install --frozen-lockfile
+          elif [ -f "package-lock.json" ]; then
+            npm ci
+          else
+            npm install
           fi
 
-      # 7. Set iOS deployment target
-      - name: Configure iOS Deployment Target
+      # Dùng Expo CLI cục bộ (npx expo) – KHÔNG cài expo-cli toàn cục (gói cũ, đã bị bỏ)
+      - name: Check Expo dependencies (non-blocking)
+        run: npx expo-doctor@latest || true
+
+      - name: Fix Expo Dependencies Mismatch
+        run: npx expo install --fix
+
+      # Thư mục ios/ cũ được sinh từ SDK 54 (Podfile, AppDelegate, project.pbxproj...) nên
+      # không tương thích React Native 0.88 -> sinh lại hoàn toàn theo SDK 58.
+      - name: Regenerate native iOS project (prebuild)
+        if: ${{ github.event.inputs.prebuild != 'false' }}
+        run: npx expo prebuild --platform ios --clean --no-install
+
+      - name: Install Cocoapods
+        working-directory: ios
+        run: pod install
+
+      - name: Build Xcode Project (Unsigned)
+        working-directory: ios
         run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          path = Path("ios/Podfile.properties.json")
-
-          if path.exists():
-              data = json.loads(path.read_text())
-          else:
-              data = {}
-
-          data["ios.deploymentTarget"] = "16.4"
-
-          path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_text(json.dumps(data, indent=2) + "\n")
-
-          print(path.read_text())
-          PY
-
-          # Update Xcode project deployment target
-          find ios -name "project.pbxproj" -print0 | while IFS= read -r -d '' file; do
-            sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 15\.1;/IPHONEOS_DEPLOYMENT_TARGET = 16.4;/g' "$file"
-          done
-
-          echo "===== DEPLOYMENT TARGET ====="
-          grep -R "IPHONEOS_DEPLOYMENT_TARGET" ios --include="project.pbxproj" || true
-
-      # 8. Install CocoaPods
-      - name: Install CocoaPods
-        run: |
-          cd ios
-          pod install
-        env:
-          COCOAPODS_DISABLE_STATS: true
-
-      # 9. Export Expo bundle
-      - name: Export Expo bundle
-        run: npx expo export --platform ios
-
-      # 10. Build iOS unsigned
-
-      # 10. Build iOS (Unsigned)
-      - name: Build iOS (Unsigned)
-        run: |
-          cd ios
-
-          WORKSPACE=$(find . -maxdepth 1 -name "*.xcworkspace" -print -quit)
-
-          if [ -z "$WORKSPACE" ]; then
-            echo "ERROR: Không tìm thấy xcworkspace"
-            exit 1
-          fi
-
-          # Scheme ứng dụng chính
-          SCHEME="Watercheckin"
-
-          echo "===== VERIFY SCHEME ====="
-          xcodebuild -list -workspace "$WORKSPACE"
-
-          if ! xcodebuild -list -json -workspace "$WORKSPACE" | \
-            python3 -c '
-          import json, sys
-          data = json.load(sys.stdin)
-          section = data.get("workspace") or data.get("project")
-          schemes = section.get("schemes", [])
-          sys.exit(0 if "Watercheckin" in schemes else 1)
-          '; then
-            echo "ERROR: Không tìm thấy Scheme Watercheckin"
-            exit 1
-          fi
-
-          echo "===== BUILDING $SCHEME ====="
-
+          set -o pipefail
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME="${WORKSPACE%.xcworkspace}"
+          echo "Workspace: $WORKSPACE | Scheme: $SCHEME"
           xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
             -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            clean build
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            build | (command -v xcbeautify >/dev/null && xcbeautify --quieter || cat)
 
-          echo "===== BUILD COMPLETED ====="
-
-      # 11. Package unsigned IPA
-      - name: Package Unsigned IPA
+      - name: Pack Unsigned IPA
+        working-directory: ios
         run: |
-          DERIVED_DATA="$RUNNER_TEMP/DerivedData"
-          PRODUCTS_DIR="$DERIVED_DATA/Build/Products"
+          APP_PATH=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -n 1)
+          echo "App: $APP_PATH"
+          rm -rf Payload expo_unsigned.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry expo_unsigned.ipa Payload
+          ls -lh expo_unsigned.ipa
 
-          echo "===== SEARCHING FOR APP ====="
-
-          find "$PRODUCTS_DIR" -type d -name "*.app" -print
-
-          APP_PATH=$(find "$PRODUCTS_DIR" \
-            -type d \
-            -name "*.app" \
-            ! -name "*Tests*.app" \
-            ! -path "*/PlugIns/*" \
-            -print -quit)
-
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: Không tìm thấy file .app"
-
-            echo "===== BUILD PRODUCTS ====="
-            find "$DERIVED_DATA" -maxdepth 5 -print || true
-
-            exit 1
-          fi
-
-          echo "Found app: $APP_PATH"
-
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-
-          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
-
-          cd "$RUNNER_TEMP/ipa"
-
-          zip -r "$GITHUB_WORKSPACE/expo_unsigned.ipa" Payload
-
-          echo "===== IPA CREATED ====="
-          ls -lh "$GITHUB_WORKSPACE/expo_unsigned.ipa"
-
-      # 12. Upload IPA
-      - name: Upload IPA
+      - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: expo-unsigned-ipa
-          path: expo_unsigned.ipa
+          path: ios/expo_unsigned.ipa
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
