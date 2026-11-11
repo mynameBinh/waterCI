@@ -111,6 +111,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
       x.removeListener(ix);
       y.removeListener(iy);
       clearTimeout(idleTimer.current);
+      clearTimeout(returnTimer.current);
     };
   }, [x, y]);
 
@@ -211,6 +212,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const [docked, setDocked] = useState(false);
   const dockedRef = useRef(false);
   const homeRef = useRef(null); // vị trí cũ trước khi bay đi
+  const returnTimer = useRef(null); // chờ một nhịp rồi mới bay về: chuyển bước (quét -> chọn ml -> lưu) nút không bị bay về giữa chừng
   const dockX = dockTarget?.x;
   const dockY = dockTarget?.y;
   const dockSize = dockTarget?.size;
@@ -218,6 +220,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
   useEffect(() => {
     const b = boundsRef.current;
     if (dockX != null && dockY != null) {
+      clearTimeout(returnTimer.current);
       if (!dockedRef.current) {
         dockedRef.current = true;
         homeRef.current = { ...posRef.current };
@@ -238,19 +241,24 @@ const FloatingAIButton = memo(function FloatingAIButton({
         }),
       ]).start();
     } else if (dockedRef.current) {
-      dockedRef.current = false;
-      const home = homeRef.current;
-      homeRef.current = null;
-      const toX = sideRef.current === "left" ? b.minX : b.maxX;
-      const toY = clamp(home ? home.y : posRef.current.y, b.minY, b.maxY);
-      Animated.parallel([
-        Animated.spring(x, { toValue: toX, useNativeDriver: false, friction: 8, tension: 55 }),
-        Animated.spring(y, { toValue: toY, useNativeDriver: false, friction: 8, tension: 55 }),
-        Animated.spring(scale, { toValue: 1, useNativeDriver: false, friction: 7, tension: 70 }),
-      ]).start(() => {
-        setDocked(false);
-        scheduleIdle();
-      });
+      clearTimeout(returnTimer.current);
+      returnTimer.current = setTimeout(() => {
+        if (!dockedRef.current) return;
+        dockedRef.current = false;
+        const home = homeRef.current;
+        homeRef.current = null;
+        const toX = sideRef.current === "left" ? b.minX : b.maxX;
+        const toY = clamp(home ? home.y : posRef.current.y, b.minY, b.maxY);
+        Animated.parallel([
+          Animated.spring(x, { toValue: toX, useNativeDriver: false, friction: 8, tension: 55 }),
+          Animated.spring(y, { toValue: toY, useNativeDriver: false, friction: 8, tension: 55 }),
+          Animated.spring(scale, { toValue: 1, useNativeDriver: false, friction: 7, tension: 70 }),
+        ]).start(({ finished }) => {
+          if (!finished || dockedRef.current) return; // bị ngắt vì lại có bước mới -> giữ nguyên trạng thái bay
+          setDocked(false);
+          scheduleIdle();
+        });
+      }, 180);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dockX, dockY, dockSize]);

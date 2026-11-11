@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AIChatModal from "../components/AIChatModal";
 import FloatingAIButton from "../components/FloatingAIButton";
+import SavingOverlay from "../components/SavingOverlay";
 import ScanningOverlay from "../components/ScanningOverlay";
 import HeaderComponent from "../components/HeaderComponent";
 import HistoryComponent from "../components/HistoryComponent";
@@ -174,8 +175,14 @@ export default function DashboardScreen({ token, onLogout }) {
   const [scan, setScan] = useState({ uri: null, mode: "water" });
   // Vị trí "ghế" huy hiệu AI trên ScanningOverlay -> nút AI nổi bay tới đó khi đang quét
   const [scanTarget, setScanTarget] = useState(null);
+  // Bước LƯU check-in (sau "Xác nhận uống"): null | "saving" | "done" -> SavingOverlay "Giọt nước dâng"
+  const [saveState, setSaveState] = useState(null);
+  const [saveVolume, setSaveVolume] = useState(0);
+  const [saveTarget, setSaveTarget] = useState(null); // ghế huy hiệu của SavingOverlay cho nút AI nổi
   // Chỗ avatar ở header khung chat -> nút AI nổi bay lên đứng đó khi chat mở (như chat head Messenger)
   const [chatTarget, setChatTarget] = useState(null);
+  // Chỗ "ghế" phía trên thẻ chọn dung tích -> nút AI đứng đó trong lúc chọn ml
+  const [volumeTarget, setVolumeTarget] = useState(null);
   // Bong bóng tin nhắn từ AI (hiện cạnh nút nổi) — thay cho Alert "thành công"
   const [aiBubble, setAiBubble] = useState(null);
   const pendingAiComment = useRef(""); // câu cảm thán AI trả về ở bước quét nước, dùng khi user xác nhận
@@ -867,8 +874,7 @@ export default function DashboardScreen({ token, onLogout }) {
       setAiLoading(true);
       try {
         const formData = buildImageFormData(uri);
-        // Quét xong là LƯU LUÔN và trả về cả dữ liệu lẫn câu nhận xét (giống check-in mục tiêu)
-        const res = await authFetch(`${API_BASE}/api/checkin/auto`, {
+        const res = await authFetch(`${API_BASE}/api/checkin`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           body: formData,
@@ -884,24 +890,15 @@ export default function DashboardScreen({ token, onLogout }) {
           throw e;
         }
         const data = await res.json();
-        const vol = data.volume_ml || 0;
-        setCurrentWater((prev) => prev + vol);
-        setHistory((prev) => [
-          {
-            id: data.id ?? Date.now(),
-            time: new Date().toLocaleTimeString("vi-VN", {
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-            volume: vol,
-          },
-          ...prev,
-        ]);
-        showAIBubble(
-          data.ai_comment || "Uống nước đều đặn, giỏi lắm luôn! 💧",
-          `+${vol} ml · ${data.container_name || "Check-in nước"}`,
-        );
-        fetchStreak(); // đủ nước + xong mục tiêu -> streak tăng
+        const vol = data.max_volume || 250;
+        // Lưu image_url để gửi kèm khi user xác nhận — chưa lưu DB ở bước này
+        pendingImageUrl.current = data.image_url || "";
+        pendingAiComment.current = data.ai_comment || "";
+        setMaxVolume(vol);
+        setContainerType(data.container_type || "unknown");
+        setVolumeSession((n) => n + 1);
+        // Quét xong -> hiện thẻ chọn dung tích (nút AI vẫn đứng trên thẻ, chưa bay về)
+        setShowVolumeModal(true);
       } catch (err) {
         const msg = friendlyScanError(err.message);
         showAIBubble(
@@ -913,62 +910,78 @@ export default function DashboardScreen({ token, onLogout }) {
         setAiLoading(false);
       }
     },
-    [token, authFetch, showAIBubble, fetchStreak],
+    [token, authFetch, showAIBubble],
   );
   submitImageRef.current = submitImage;
 
-  const handleConfirmVolume = useCallback(async (confirmedVol) => {
-    // Optimistic UI update ngay lập tức
-    setShowVolumeModal(false);
-    setCurrentWater((prev) => prev + confirmedVol);
-    setHistory((prev) => [
-      {
-        id: Date.now(),
-        time: new Date().toLocaleTimeString("vi-VN", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        volume: confirmedVol,
-      },
-      ...prev,
-    ]);
-
-    // Gửi volume thực lên backend — lưu DB với đúng số ml user đã chọn
-    try {
-      const res = await authFetch(`${API_BASE}/api/checkin/confirm`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          volume_ml: confirmedVol,
-          image_url: pendingImageUrl.current,
-        }),
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(`HTTP ${res.status}: ${errText}`);
+  const handleConfirmVolume = useCallback(
+    async (confirmedVol) => {
+      // Chọn xong -> đóng thẻ chọn, bật SavingOverlay (nút AI vẫn ở trên) và chờ server trả về
+      setShowVolumeModal(false);
+      setSaveVolume(confirmedVol);
+      setSaveState("saving");
+      try {
+        const res = await authFetch(`${API_BASE}/api/checkin/confirm`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            volume_ml: confirmedVol,
+            image_url: pendingImageUrl.current,
+          }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(
+            typeof d?.detail === "string" ? d.detail : `HTTP ${res.status}`,
+          );
+        }
+        // Server đã lưu xong -> cập nhật giao diện rồi thông báo
+        setCurrentWater((prev) => prev + confirmedVol);
+        setHistory((prev) => [
+          {
+            id: Date.now(),
+            time: new Date().toLocaleTimeString("vi-VN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+            volume: confirmedVol,
+          },
+          ...prev,
+        ]);
+        // Nước dâng đầy + dấu ✓ rồi mới đóng overlay và hiện bong bóng AI
+        setSaveState("done");
+        await new Promise((r) => setTimeout(r, 1000));
+        showAIBubble(
+          pendingAiComment.current || "Uống nước đều đặn, giỏi lắm luôn! 💧",
+          `+${confirmedVol} ml · Check-in nước`,
+        );
+        pendingAiComment.current = "";
+        pendingImageUrl.current = "";
+        fetchStreak(); // đủ nước + xong mục tiêu -> streak tăng
+      } catch (err) {
+        console.warn("[checkin/confirm] thất bại:", err.message);
+        showAIBubble(
+          friendlyScanError(err.message) ||
+            "Chưa lưu được check-in lên máy chủ, bạn thử lại nhé! 🥺",
+          "Lỗi lưu dữ liệu",
+          "error",
+        );
+      } finally {
+        setSaveState(null);
       }
-      showAIBubble(
-        pendingAiComment.current || "Uống nước đều đặn, giỏi lắm luôn! 💧",
-        `+${confirmedVol} ml · Check-in nước`,
-      );
-      pendingAiComment.current = "";
-      fetchStreak(); // đủ nước + xong mục tiêu -> streak tăng
-    } catch (err) {
-      // Log để debug — kiểm tra console khi gặp lỗi (404 = backend chưa có route confirm)
-      console.warn("[checkin/confirm] thất bại:", err.message);
-      // Nếu lưu DB thất bại — rollback UI
-      setCurrentWater((prev) => prev - confirmedVol);
-      setHistory((prev) => prev.slice(1));
-      showAIBubble(
-        "Chưa lưu được check-in lên máy chủ, bạn thử lại nhé! 🥺",
-        "Lỗi lưu dữ liệu",
-        "error",
-      );
-    }
-  }, [token, authFetch, fetchStreak, showAIBubble]);
+    },
+    [token, authFetch, fetchStreak, showAIBubble],
+  );
+
+  // Huỷ ở bước chọn dung tích: bỏ ảnh tạm, nút AI bay về
+  const handleCancelVolume = useCallback(() => {
+    setShowVolumeModal(false);
+    pendingImageUrl.current = "";
+    pendingAiComment.current = "";
+  }, []);
 
   const handleLogoutPrompt = useCallback(() => {
     Alert.alert("Đăng xuất", "Đăng xuất tài khoản này ư?", [
@@ -1407,7 +1420,7 @@ export default function DashboardScreen({ token, onLogout }) {
         onPress={handleOpenAIChat}
         bubble={aiBubble}
         onBubbleClose={handleBubbleClose}
-        dockTarget={scanTarget || chatTarget}
+        dockTarget={scanTarget || saveTarget || volumeTarget || chatTarget}
       />
 
       {/* ── DOCK ── */}
@@ -1570,17 +1583,21 @@ export default function DashboardScreen({ token, onLogout }) {
         />
       )}
 
-      {/* -- VOLUME MODAL -- */}
-      <Modal visible={showVolumeModal} transparent animationType="fade">
-        <VolumeSheet
-          key={volumeSession}
-          colors={colors}
-          maxVolume={maxVolume}
-          containerType={containerType}
-          compact={IS_ANDROID && isShortScreen}
-          onConfirm={handleConfirmVolume}
-        />
-      </Modal>
+      {/* -- CHỌN DUNG TÍCH (không dùng Modal để nút AI nổi vẫn hiện ở trên) -- */}
+      {showVolumeModal && (
+        <View style={styles.volumeHost}>
+          <VolumeSheet
+            key={volumeSession}
+            colors={colors}
+            maxVolume={maxVolume}
+            containerType={containerType}
+            compact={IS_ANDROID && isShortScreen}
+            onConfirm={handleConfirmVolume}
+            onCancel={handleCancelVolume}
+            onDockTarget={setVolumeTarget}
+          />
+        </View>
+      )}
 
       {/* ── OVERLAY ĐANG QUÉT (gửi ảnh cho AI, chờ kết quả) ── */}
       <ScanningOverlay
@@ -1588,6 +1605,14 @@ export default function DashboardScreen({ token, onLogout }) {
         uri={scan.uri}
         mode={scan.mode}
         onBadgeTarget={setScanTarget}
+      />
+
+      {/* ── ĐANG LƯU CHECK-IN (sau "Xác nhận uống"): animation giọt nước dâng, không dùng ảnh ── */}
+      <SavingOverlay
+        visible={!!saveState}
+        done={saveState === "done"}
+        volume={saveVolume}
+        onBadgeTarget={setSaveTarget}
       />
     </View>
   );
@@ -1836,7 +1861,10 @@ const VolumeSheet = memo(function VolumeSheet({
   containerType,
   compact,
   onConfirm,
+  onCancel,
+  onDockTarget,
 }) {
+  useEffect(() => () => onDockTarget?.(null), []); // eslint-disable-line react-hooks/exhaustive-deps
   const [volume, setVolume] = useState(maxVolume);
   const volumeRef = useRef(maxVolume);
   const startVolumeRef = useRef(maxVolume);
@@ -1878,8 +1906,24 @@ const VolumeSheet = memo(function VolumeSheet({
   return (
     <View style={styles.modalWaterOverlay}>
       <View
-        style={[styles.modalWaterCard, { backgroundColor: colors.card }]}
+        style={[
+          styles.modalWaterCard,
+          { backgroundColor: colors.card, paddingTop: compact ? 44 : 52 },
+        ]}
+        onLayout={(e) => {
+          // Báo tâm "ghế" nằm vắt qua mép trên thẻ để nút AI nổi bay tới đứng đó
+          const { x, y, width } = e.nativeEvent.layout;
+          onDockTarget?.({ x: x + width / 2, y, size: 64 });
+        }}
       >
+        <View pointerEvents="none" style={styles.volSeatWrap}>
+          <View
+            style={[
+              styles.volSeat,
+              { backgroundColor: colors.card, borderColor: colors.card },
+            ]}
+          />
+        </View>
         <View
           style={[
             styles.containerBadge,
@@ -1986,6 +2030,15 @@ const VolumeSheet = memo(function VolumeSheet({
           onPress={() => onConfirm(volumeRef.current)}
         >
           <Text style={styles.confirmWaterBtnText}>Xác nhận uống</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={onCancel}
+          hitSlop={8}
+          style={styles.cancelVolBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Huỷ"
+        >
+          <Text style={[styles.cancelVolText, { color: colors.textMuted }]}>Huỷ, chụp lại</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -2402,6 +2455,19 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   confirmWaterBtnText: { color: "#ffffff", fontSize: 16, fontWeight: "750" },
+  volumeHost: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
+    elevation: 30,
+  },
+  volSeatWrap: { position: "absolute", top: -32, left: 0, right: 0, alignItems: "center" },
+  volSeat: { width: 64, height: 64, borderRadius: 32, borderWidth: 4 },
+  cancelVolBtn: { marginTop: 12, paddingVertical: 4 },
+  cancelVolText: { fontSize: 13.5, fontWeight: "700" },
 
   // Loading overlay
   globalLoading: {
