@@ -1,10 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Camera, CameraView } from "expo-camera";
+import { Camera } from "expo-camera";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import { File as ExpoFile } from "expo-file-system";
-import { LinearGradient } from "expo-linear-gradient";
 import * as Notifications from "expo-notifications";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -25,6 +24,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AIChatModal from "../components/AIChatModal";
+import CameraOverlay from "../components/CameraOverlay";
 import FloatingAIButton from "../components/FloatingAIButton";
 import SavingOverlay from "../components/SavingOverlay";
 import ScanningOverlay from "../components/ScanningOverlay";
@@ -43,6 +43,7 @@ import {
   notifyNewTasks,
   sendTestNotification,
   setBadge,
+  setNotificationVoice,
   syncTaskReminders,
   syncWaterReminders,
   TASK_DEFAULT_TIMES,
@@ -60,6 +61,9 @@ const friendlyScanError = (m = "") =>
   /network|failed to fetch|timeout|timed out/i.test(m)
     ? "Mạng chập chờn rồi, kiểm tra kết nối rồi thử lại nhé! 📶"
     : m || "Có lỗi xảy ra, bạn thử lại nhé.";
+
+// Gợi ý ở dòng phụ của bong bóng lỗi khi check-in có thể khiếu nại (server đang giữ tạm ảnh)
+const APPEAL_HINT = "Chưa thành công · chạm để giải thích 💬";
 
 const buildImageFormData = (uri) => {
   const formData = new FormData();
@@ -106,14 +110,9 @@ const CONTAINER_HEIGHT = { glass: 135, mug: 120, thermos: 170, bottle: 200 };
 // đồng bộ (đặt lại lịch nhắc, widget...) dù dữ liệu y hệt.
 const sameJSON = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
 
-// Camera: vuốt dọc để zoom (thang zoom của expo-camera là [0, 1])
-const ZOOM_MIN = 0;
-const ZOOM_MAX = 1;
-const ZOOM_SWIPE_SENSITIVITY = 400; // càng lớn thì vuốt càng "chậm" (mượt hơn)
-
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function DashboardScreen({ token, onLogout }) {
-  const { colors } = useTheme();
+  const { colors, accentKey } = useTheme();
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
@@ -180,7 +179,8 @@ export default function DashboardScreen({ token, onLogout }) {
   const [saveVolume, setSaveVolume] = useState(0);
   const [saveTarget, setSaveTarget] = useState(null); // ghế huy hiệu của SavingOverlay cho nút AI nổi
   // Chỗ avatar ở header khung chat -> nút AI nổi bay lên đứng đó khi chat mở (như chat head Messenger)
-  const [chatTarget, setChatTarget] = useState(null);
+  const [chatMounted, setChatMounted] = useState(false); // khung chat đang hiện -> ẩn nút AI nổi
+  const [chatOrigin, setChatOrigin] = useState(null); // tâm nút AI lúc bấm -> chat bung ra từ đó
   // Chỗ "ghế" phía trên thẻ chọn dung tích -> nút AI đứng đó trong lúc chọn ml
   const [volumeTarget, setVolumeTarget] = useState(null);
   // Bong bóng tin nhắn từ AI (hiện cạnh nút nổi) — thay cho Alert "thành công"
@@ -191,6 +191,29 @@ export default function DashboardScreen({ token, onLogout }) {
     [],
   );
   const handleBubbleClose = useCallback(() => setAiBubble(null), []);
+  // Check-in bị AI từ chối -> server giữ tạm ảnh; bấm bong bóng (hoặc nút AI có chấm đỏ) để giải thích với chat bot.
+  // { id, kind: 'water'|'task', uri, text, status: 'open'|'approved', expiresAt, containerType, maxVolume }
+  const [appeal, setAppeal] = useState(null);
+  const appealModeRef = useRef(null); // id khiếu nại đã duyệt đang chọn ml -> handleConfirmVolume gửi bù thay vì check-in thường
+  const registerAppeal = useCallback((id, ttlSec, kind, uri, text) => {
+    if (!id) return;
+    setAppeal({
+      id,
+      kind,
+      uri,
+      text,
+      status: "open",
+      expiresAt: Date.now() + Math.max(30, (ttlSec || 1800) - 30) * 1000,
+    });
+  }, []);
+  useEffect(() => {
+    if (!appeal?.expiresAt) return undefined;
+    const t = setTimeout(
+      () => setAppeal((a) => (a && a.id === appeal.id ? null : a)),
+      Math.max(0, appeal.expiresAt - Date.now()),
+    );
+    return () => clearTimeout(t);
+  }, [appeal?.id, appeal?.expiresAt]);
   const [showMiniCam, setShowMiniCam] = useState(false);
 
   // Volume modal
@@ -198,6 +221,9 @@ export default function DashboardScreen({ token, onLogout }) {
   const [volumeSession, setVolumeSession] = useState(0); // đổi key -> modal mở lại luôn mới
   const [maxVolume, setMaxVolume] = useState(250);
   const [containerType, setContainerType] = useState("unknown");
+  // AI ước lượng mực nước trong vật chứa lúc quét: núm kéo đặt sẵn ở mức này (null = không rõ -> mặc định đầy)
+  const [suggestedVolume, setSuggestedVolume] = useState(null);
+  const [fillPercent, setFillPercent] = useState(null);
   const pendingImageUrl = useRef(""); // lưu image_url từ /api/checkin để gửi khi confirm
 
   // Notifications
@@ -227,6 +253,13 @@ export default function DashboardScreen({ token, onLogout }) {
     "15:00",
     "20:00",
   ]);
+  // Cách Tiểu Đậu gọi người dùng trong thông báo ("anh" | "chị"), lấy từ ghi nhớ trên server
+  const [notifAddress, setNotifAddress] = useState(null);
+  // Gán theme + cách xưng hô cho utils/notifications (chỉ gán biến, nên đặt ở thân component để luôn
+  // chạy TRƯỚC mọi effect đặt lịch bên dưới)
+  setNotificationVoice({ accent: accentKey, address: notifAddress });
+  const waterCfgRef = useRef({ push: false, times: [] });
+  const voiceMountedRef = useRef(false);
   const presetTimes = useMemo(
     () => [
       "07:00",
@@ -372,7 +405,37 @@ export default function DashboardScreen({ token, onLogout }) {
       times: taskRemindTimes,
       enabled: isPushEnabled && taskRemindEnabled,
     }).then((pending) => setBadge(isPushEnabled ? pending : 0));
-  }, [tasksLoaded, activeTasks, taskRemindTimes, taskRemindEnabled, isPushEnabled]);
+  }, [tasksLoaded, activeTasks, taskRemindTimes, taskRemindEnabled, isPushEnabled, accentKey, notifAddress]);
+
+  // ── Nhắc uống nước: đặt lại khi đổi theme / cách xưng hô để ảnh + câu chữ khớp ──────────
+  useEffect(() => {
+    waterCfgRef.current = { push: isPushEnabled, times: selectedTimes };
+  }, [isPushEnabled, selectedTimes]);
+  useEffect(() => {
+    if (!voiceMountedRef.current) {
+      voiceMountedRef.current = true; // lần đầu đã được đặt lịch ở restoreNotificationSettings
+      return;
+    }
+    if (isPushEnabled) syncWaterReminders(selectedTimes, true, selectedSoundRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accentKey, notifAddress]);
+
+  // ── Lấy cách xưng hô (anh/chị) mà người dùng đã nhờ Tiểu Đậu ghi nhớ ─────────────────────
+  const refreshNotifVoice = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/chat/address`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const d = await res.json();
+      if (d?.address === "anh" || d?.address === "chị") setNotifAddress(d.address);
+    } catch {
+      /* offline -> dùng lại cách xưng hô đã lưu */
+    }
+  }, [token, authFetch]);
+  useEffect(() => {
+    if (token) refreshNotifVoice();
+  }, [token, refreshNotifVoice]);
 
   // ── Quay lại app: tải lại task/streak (kéo theo làm mới widget), kiểm tra quyền ──
   useEffect(() => {
@@ -381,9 +444,13 @@ export default function DashboardScreen({ token, onLogout }) {
       fetchActiveTask();
       fetchStreak();
       getPermissionStatus().then(setPermissionStatus);
+      refreshNotifVoice();
+      // Đặt lại nhắc uống nước -> mỗi lần mở app Tiểu Đậu có câu nhắc ngẫu nhiên mới
+      const cfg = waterCfgRef.current;
+      if (cfg.push) syncWaterReminders(cfg.times, true, selectedSoundRef.current);
     });
     return () => sub.remove();
-  }, [fetchActiveTask, fetchStreak]);
+  }, [fetchActiveTask, fetchStreak, refreshNotifVoice]);
 
   // ── Load dữ liệu ban đầu ─────────────────────────────────────────────────
   useEffect(() => {
@@ -845,10 +912,13 @@ export default function DashboardScreen({ token, onLogout }) {
         );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          // Claude từ chối -> backend trả lý do trong `detail` (chuỗi)
-          throw new Error(
+          // Claude từ chối -> backend trả lý do trong `detail` (chuỗi) + giữ tạm ảnh (header X-Appeal-Id)
+          const e = new Error(
             typeof data.detail === "string" ? data.detail : "Check-in thất bại",
           );
+          e.appealId = res.headers.get("X-Appeal-Id") || "";
+          e.appealTtl = Number(res.headers.get("X-Appeal-Ttl")) || 1800;
+          throw e;
         }
         showAIBubble(
           data.ai_comment || data.message || "Hoàn thành mục tiêu rồi, giỏi quá! ✅",
@@ -859,12 +929,17 @@ export default function DashboardScreen({ token, onLogout }) {
       } catch (err) {
         // Lý do AI từ chối nằm sau "Chưa đúng yêu cầu: " -> chỉ hiện lý do trong bong bóng
         const reason = friendlyScanError(err.message).replace(/^Chưa đúng yêu cầu:\s*/, "");
-        showAIBubble(reason, "Check-in mục tiêu chưa thành công", "error");
+        if (err.appealId) registerAppeal(err.appealId, err.appealTtl, "task", uri, reason);
+        showAIBubble(
+          reason,
+          err.appealId ? APPEAL_HINT : "Check-in mục tiêu chưa thành công",
+          "error",
+        );
       } finally {
         setAiLoading(false);
       }
     },
-    [token, activeTask, authFetch, fetchActiveTask, fetchStreak, showAIBubble],
+    [token, activeTask, authFetch, fetchActiveTask, fetchStreak, showAIBubble, registerAppeal],
   );
   submitTaskRef.current = submitTaskImage;
 
@@ -887,6 +962,8 @@ export default function DashboardScreen({ token, onLogout }) {
               (typeof d?.detail === "string" ? d.detail : "Không phát hiện nước"),
           );
           e.aiComment = d?.detail?.ai_comment || ""; // lý do do AI nói (nếu có)
+          e.appealId = res.headers.get("X-Appeal-Id") || ""; // server đang giữ tạm ảnh -> có thể khiếu nại
+          e.appealTtl = Number(res.headers.get("X-Appeal-Ttl")) || 1800;
           throw e;
         }
         const data = await res.json();
@@ -896,21 +973,30 @@ export default function DashboardScreen({ token, onLogout }) {
         pendingAiComment.current = data.ai_comment || "";
         setMaxVolume(vol);
         setContainerType(data.container_type || "unknown");
+        const aiMl = Number(data.suggested_volume_ml);
+        setSuggestedVolume(Number.isFinite(aiMl) && aiMl > 0 ? Math.min(aiMl, vol) : null);
+        setFillPercent(typeof data.fill_percent === "number" ? data.fill_percent : null);
         setVolumeSession((n) => n + 1);
         // Quét xong -> hiện thẻ chọn dung tích (nút AI vẫn đứng trên thẻ, chưa bay về)
         setShowVolumeModal(true);
       } catch (err) {
         const msg = friendlyScanError(err.message);
+        const shown = err.aiComment || msg;
+        if (err.appealId) registerAppeal(err.appealId, err.appealTtl, "water", uri, shown);
         showAIBubble(
-          err.aiComment || msg,
-          err.aiComment ? msg : "Check-in nước chưa thành công",
+          shown,
+          err.appealId
+            ? APPEAL_HINT
+            : err.aiComment
+              ? msg
+              : "Check-in nước chưa thành công",
           "error",
         );
       } finally {
         setAiLoading(false);
       }
     },
-    [token, authFetch, showAIBubble],
+    [token, authFetch, showAIBubble, registerAppeal],
   );
   submitImageRef.current = submitImage;
 
@@ -921,22 +1007,31 @@ export default function DashboardScreen({ token, onLogout }) {
       setSaveVolume(confirmedVol);
       setSaveState("saving");
       try {
-        const res = await authFetch(`${API_BASE}/api/checkin/confirm`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
+        const appealId = appealModeRef.current; // gửi bù cho check-in từng bị từ chối (AI đã duyệt)
+        const res = await authFetch(
+          appealId
+            ? `${API_BASE}/api/appeals/${appealId}/confirm`
+            : `${API_BASE}/api/checkin/confirm`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(
+              appealId
+                ? { volume_ml: confirmedVol }
+                : { volume_ml: confirmedVol, image_url: pendingImageUrl.current },
+            ),
           },
-          body: JSON.stringify({
-            volume_ml: confirmedVol,
-            image_url: pendingImageUrl.current,
-          }),
-        });
+        );
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
-          throw new Error(
+          const e = new Error(
             typeof d?.detail === "string" ? d.detail : `HTTP ${res.status}`,
           );
+          e.status = res.status;
+          throw e;
         }
         // Server đã lưu xong -> cập nhật giao diện rồi thông báo
         setCurrentWater((prev) => prev + confirmedVol);
@@ -954,15 +1049,29 @@ export default function DashboardScreen({ token, onLogout }) {
         // Nước dâng đầy + dấu ✓ rồi mới đóng overlay và hiện bong bóng AI
         setSaveState("done");
         await new Promise((r) => setTimeout(r, 1000));
+        const wasAppeal = !!appealModeRef.current;
         showAIBubble(
-          pendingAiComment.current || "Uống nước đều đặn, giỏi lắm luôn! 💧",
-          `+${confirmedVol} ml · Check-in nước`,
+          wasAppeal
+            ? "Em ghi nhận bù rùi nha, lần sau chụp rõ hơn xíu giúp em! 😾"
+            : pendingAiComment.current || "Uống nước đều đặn, giỏi lắm luôn! 💧",
+          wasAppeal
+            ? `+${confirmedVol} ml · Ghi nhận bù`
+            : `+${confirmedVol} ml · Check-in nước`,
         );
+        if (wasAppeal) {
+          appealModeRef.current = null;
+          setAppeal(null);
+        }
         pendingAiComment.current = "";
         pendingImageUrl.current = "";
         fetchStreak(); // đủ nước + xong mục tiêu -> streak tăng
       } catch (err) {
         console.warn("[checkin/confirm] thất bại:", err.message);
+        // khiếu nại hết hạn / đã được ghi nhận -> đóng luôn; lỗi khác (mạng, 422…) giữ lại để thử lại
+        if (appealModeRef.current && (err.status === 409 || err.status === 410)) {
+          appealModeRef.current = null;
+          setAppeal(null);
+        }
         showAIBubble(
           friendlyScanError(err.message) ||
             "Chưa lưu được check-in lên máy chủ, bạn thử lại nhé! 🥺",
@@ -979,9 +1088,61 @@ export default function DashboardScreen({ token, onLogout }) {
   // Huỷ ở bước chọn dung tích: bỏ ảnh tạm, nút AI bay về
   const handleCancelVolume = useCallback(() => {
     setShowVolumeModal(false);
+    appealModeRef.current = null; // khiếu nại (nếu có) vẫn còn hạn: mở lại chat để bấm "Chọn lượng nước" lần nữa
     pendingImageUrl.current = "";
     pendingAiComment.current = "";
   }, []);
+
+  // AI đã DUYỆT khiếu nại (user bấm nút trong chat):
+  //  • nước  -> đóng chat, mở bảng chọn ml; chọn xong handleConfirmVolume gửi bù bằng ảnh tạm trên server
+  //  • mục tiêu -> ghi nhận luôn
+  const handleAppealApproved = useCallback(
+    async (a) => {
+      if (!a) return;
+      setShowAIChat(false);
+      if (a.kind === "water") {
+        appealModeRef.current = a.id;
+        pendingAiComment.current = "";
+        setMaxVolume(a.maxVolume || 250);
+        setContainerType(a.containerType || "unknown");
+        setSuggestedVolume(null);
+        setFillPercent(null);
+        setVolumeSession((n) => n + 1);
+        setShowVolumeModal(true);
+        return;
+      }
+      setScan({ uri: a.uri, mode: "task" });
+      setAiLoading(true);
+      try {
+        const res = await authFetch(`${API_BASE}/api/appeals/${a.id}/confirm`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const e = new Error(
+            typeof data.detail === "string" ? data.detail : "Chưa ghi nhận được",
+          );
+          e.status = res.status;
+          throw e;
+        }
+        setAppeal(null);
+        showAIBubble("Em ghi nhận bù mục tiêu cho chị rồi nha! ✅", data.message);
+        fetchActiveTask(true);
+        fetchStreak();
+      } catch (err) {
+        if (err.status === 409 || err.status === 410) setAppeal(null);
+        showAIBubble(friendlyScanError(err.message), "Chưa ghi nhận được", "error");
+      } finally {
+        setAiLoading(false);
+      }
+    },
+    [token, authFetch, showAIBubble, fetchActiveTask, fetchStreak],
+  );
 
   const handleLogoutPrompt = useCallback(() => {
     Alert.alert("Đăng xuất", "Đăng xuất tài khoản này ư?", [
@@ -1194,7 +1355,10 @@ export default function DashboardScreen({ token, onLogout }) {
       dockClearance,
     ],
   );
-  const handleOpenAIChat = useCallback(() => setShowAIChat(true), []);
+  const handleOpenAIChat = useCallback((origin) => {
+    setChatOrigin(origin && typeof origin.x === "number" ? origin : null); // nơi khác gọi (không có toạ độ) -> bung từ góc dưới phải
+    setShowAIChat(true);
+  }, []);
   const profileTab = useMemo(
     () => (
     <ProfileTab
@@ -1351,7 +1515,11 @@ export default function DashboardScreen({ token, onLogout }) {
         token={token}
         apiBase={API_BASE}
         authFetch={authFetch}
-        onDockTarget={setChatTarget}
+        origin={chatOrigin}
+        onMountedChange={setChatMounted}
+        appeal={appeal}
+        onAppealChange={setAppeal}
+        onAppealApproved={handleAppealApproved}
       />
 
       {/* ── MODAL CÀI ĐẶT NHẮC NHỞ (chuyển từ tab riêng sang đây) ── */}
@@ -1420,7 +1588,9 @@ export default function DashboardScreen({ token, onLogout }) {
         onPress={handleOpenAIChat}
         bubble={aiBubble}
         onBubbleClose={handleBubbleClose}
-        dockTarget={scanTarget || saveTarget || volumeTarget || chatTarget}
+        dockTarget={scanTarget || saveTarget || volumeTarget}
+        hidden={chatMounted}
+        badge={!!appeal}
       />
 
       {/* ── DOCK ── */}
@@ -1590,6 +1760,8 @@ export default function DashboardScreen({ token, onLogout }) {
             key={volumeSession}
             colors={colors}
             maxVolume={maxVolume}
+            initialVolume={suggestedVolume}
+            fillPercent={fillPercent}
             containerType={containerType}
             compact={IS_ANDROID && isShortScreen}
             onConfirm={handleConfirmVolume}
@@ -1681,183 +1853,13 @@ const DockItem = memo(function DockItem({
   );
 });
 
-// ─── Camera overlay: state zoom/flash nằm riêng ─────────────────────────────
-// Trước đây camZoom/flash nằm ở Dashboard -> mỗi nhịp vuốt zoom render lại cả
-// màn hình. Giờ chỉ component này render lại.
-const CameraOverlay = memo(function CameraOverlay({
-  colors,
-  subtitle,
-  frameWidth,
-  aiLoading,
-  onPicture,
-  onClose,
-}) {
-  const [flash, setFlash] = useState("off");
-  const [camZoom, setCamZoom] = useState(0.2); // 0.2 = camera 1x (chuẩn iPhone 3 mắt)
-  const cameraRef = useRef(null);
-  const camZoomRef = useRef(0.2); // giá trị zoom mới nhất, dùng trong PanResponder
-  const zoomStartRef = useRef(0.2); // giá trị zoom tại thời điểm bắt đầu vuốt
-  const aiLoadingRef = useRef(aiLoading);
-  aiLoadingRef.current = aiLoading;
-
-  // Vuốt dọc để zoom: lên = zoom in, xuống = zoom out. Chỉ setState khi giá trị
-  // (làm tròn 0.01) thực sự đổi.
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_evt, gestureState) =>
-        Math.abs(gestureState.dy) > Math.abs(gestureState.dx) &&
-        Math.abs(gestureState.dy) > 4,
-      onPanResponderGrant: () => {
-        zoomStartRef.current = camZoomRef.current;
-      },
-      onPanResponderMove: (_evt, gestureState) => {
-        const delta = -gestureState.dy / ZOOM_SWIPE_SENSITIVITY;
-        const next =
-          Math.round(
-            Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomStartRef.current + delta)) *
-              100,
-          ) / 100;
-        if (next === camZoomRef.current) return;
-        camZoomRef.current = next;
-        setCamZoom(next);
-      },
-    }),
-  ).current;
-
-  const takingRef = useRef(false);
-  const handleTake = useCallback(async () => {
-    if (!cameraRef.current || aiLoadingRef.current || takingRef.current) return;
-    takingRef.current = true;
-    try {
-      // quality 0.5 + skipProcessing: true → nhanh hơn, nhẹ hơn, AI vẫn nhận diện tốt
-      const photo = await cameraRef.current.takePictureAsync({
-        quality: 0.5,
-        skipProcessing: true,
-      });
-      // onPicture đóng camera rồi mới bật overlay quét -> không đè lên nút chụp
-      onPicture(photo.uri);
-    } catch {
-      takingRef.current = false; // chụp lỗi: cho bấm lại
-    }
-  }, [onPicture]);
-
-  return (
-    <View style={styles.cameraOverlay}>
-      <View
-        style={[styles.miniCamContainer, { backgroundColor: colors.card }]}
-      >
-        <View style={styles.miniCamTitleRow}>
-          <View style={styles.miniCamTitleIconWrap}>
-            <Ionicons name="camera" size={16} color={colors.primary} />
-          </View>
-          <Text style={[styles.miniCamTitle, { color: colors.text }]}>
-            Chụp ảnh để bắt đầu kiểm tra
-          </Text>
-        </View>
-        <Text style={[styles.miniCamSubtitle, { color: colors.textMuted }]}>
-          {subtitle}
-        </Text>
-
-        {/* ── Khung camera kiểu viewfinder ── */}
-        <LinearGradient
-          colors={[colors.primaryLight, colors.primary]}
-          style={[
-            styles.cameraFrameBorder,
-            frameWidth != null && { width: frameWidth + 6 },
-          ]}
-        >
-          <View
-            style={[
-              styles.cameraFrame,
-              frameWidth != null && { width: frameWidth },
-            ]}
-            {...panResponder.panHandlers}
-          >
-            <CameraView
-              style={styles.cameraView}
-              facing="back"
-              flash={flash}
-              enableTorch={flash === "on"}
-              ref={cameraRef}
-              zoom={camZoom}
-            />
-
-            {/* Góc ngắm viewfinder */}
-            <View style={[styles.viewfinderCorner, styles.cornerTL]} />
-            <View style={[styles.viewfinderCorner, styles.cornerTR]} />
-            <View style={[styles.viewfinderCorner, styles.cornerBL]} />
-            <View style={[styles.viewfinderCorner, styles.cornerBR]} />
-
-            {/* Badge zoom */}
-            <View style={styles.zoomBadge}>
-              <Text style={styles.zoomBadgeText}>
-                {(1 + (camZoom - 0.2) * 5).toFixed(1)}x
-              </Text>
-            </View>
-          </View>
-        </LinearGradient>
-
-        <View style={styles.actionRow}>
-          <TouchableOpacity
-            style={[
-              styles.closeCircle,
-              {
-                backgroundColor: colors.background,
-                borderColor: colors.border,
-              },
-            ]}
-            onPress={onClose}
-          >
-            <Ionicons name="close" size={22} color={colors.textMuted} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={handleTake}
-            style={[
-              styles.shutterBtnShadow,
-              { shadowColor: colors.primary },
-            ]}
-          >
-            <LinearGradient
-              colors={[colors.primaryLight, colors.primary]}
-              style={styles.shutterBtnOuter}
-            >
-              <View style={styles.shutterBtnInner} />
-            </LinearGradient>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.flashCircle,
-              {
-                backgroundColor: colors.background,
-                borderColor: colors.border,
-              },
-              flash === "on" && styles.flashCircleActive,
-            ]}
-            onPress={() =>
-              setFlash((prev) => (prev === "off" ? "on" : "off"))
-            }
-          >
-            <Ionicons
-              name={flash === "on" ? "flash" : "flash-off"}
-              size={20}
-              color={flash === "on" ? "#eab308" : colors.textMuted}
-            />
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
-  );
-});
-
 // ─── Modal chọn lượng nước: state kéo thả nằm riêng ─────────────────────────
 // Kéo núm = setState liên tục; để ở Dashboard sẽ render lại cả màn hình.
 const VolumeSheet = memo(function VolumeSheet({
   colors,
   maxVolume,
+  initialVolume,
+  fillPercent,
   containerType,
   compact,
   onConfirm,
@@ -1865,9 +1867,12 @@ const VolumeSheet = memo(function VolumeSheet({
   onDockTarget,
 }) {
   useEffect(() => () => onDockTarget?.(null), []); // eslint-disable-line react-hooks/exhaustive-deps
-  const [volume, setVolume] = useState(maxVolume);
-  const volumeRef = useRef(maxVolume);
-  const startVolumeRef = useRef(maxVolume);
+  // Mở thẻ với mức nước AI ước lượng (không có -> đầy); người dùng vẫn kéo núm để chỉnh lại
+  const startVol = Math.min(Math.max(initialVolume ?? maxVolume, 10), maxVolume);
+  const hasAiGuess = initialVolume != null;
+  const [volume, setVolume] = useState(startVol);
+  const volumeRef = useRef(startVol);
+  const startVolumeRef = useRef(startVol);
   const maxVolumeRef = useRef(maxVolume);
   const heightRef = useRef(CONTAINER_HEIGHT[containerType] ?? 135);
   maxVolumeRef.current = maxVolume;
@@ -1948,6 +1953,12 @@ const VolumeSheet = memo(function VolumeSheet({
             / {maxVolume} ml
           </Text>
         </Text>
+        {hasAiGuess && (
+          <Text style={[styles.aiGuessHint, { color: colors.textMuted }]}>
+            ✨ AI ước lượng ~{startVol} ml
+            {typeof fillPercent === "number" ? ` (${fillPercent}%)` : ""} ✨
+          </Text>
+        )}
 
         <View
           style={[
@@ -2297,6 +2308,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   containerBadgeText: { fontSize: 12.5, fontWeight: "800" },
+  aiGuessHint: {
+    fontSize: 12,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: -10,
+    marginBottom: 10,
+  },
   interactiveArea: {
     flexDirection: "row",
     alignItems: "center",

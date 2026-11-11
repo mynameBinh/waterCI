@@ -1,8 +1,24 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { useColorScheme } from "react-native";
+import * as SplashScreen from "expo-splash-screen";
+import * as SystemUI from "expo-system-ui";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useColorScheme, View } from "react-native";
 
 export const ThemeContext = createContext();
+
+// ── Giai đoạn mở app ─────────────────────────────────────────────────────────
+// Giữ màn splash native cho tới khi theme đã đọc xong VÀ khung đầu tiên (đúng màu theme) đã vẽ.
+// Nhờ vậy không còn khoảnh khắc trắng/đen giữa splash và app. Phải gọi ở mức module (trước khi render).
+SplashScreen.preventAutoHideAsync().catch(() => {});
+SplashScreen.setOptions?.({ duration: 250, fade: true }); // splash tan mượt thay vì "cắt" sang màu theme
 
 // Bảng màu nền mặc định (giữ lại để file khác import vẫn chạy).
 // Khi chạy thật, màu nền được phối theo accent ở bên dưới (surfaceLight / surfaceDark).
@@ -285,6 +301,20 @@ export const ThemeProvider = ({ children }) => {
     };
   }, [activeTheme, accentKey]);
 
+  // Màu nền của CỬA SỔ GỐC (native) = màu nền theme: không còn mảng trắng/đen lộ ra khi mở app,
+  // bật bàn phím, xoay máy hoặc chuyển màn hình.
+  useEffect(() => {
+    SystemUI.setBackgroundColorAsync(colors.background).catch(() => {});
+  }, [colors.background]);
+
+  // Ẩn splash sau khi khung đầu tiên đã vẽ bằng đúng màu theme
+  const splashHidden = useRef(false);
+  const hideSplash = useCallback(() => {
+    if (splashHidden.current) return;
+    splashHidden.current = true;
+    requestAnimationFrame(() => SplashScreen.hideAsync().catch(() => {}));
+  }, []);
+
   const value = useMemo(
     () => ({
       themePreference,
@@ -302,10 +332,19 @@ export const ThemeProvider = ({ children }) => {
     [themePreference, activeTheme, colors, accentKey, decorationKey],
   );
 
+  // Chưa đọc xong theme đã lưu: splash native vẫn đang che (preventAutoHideAsync ở trên) nên trả null là an toàn
   if (!isReady) return null;
 
   return (
-    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+    <ThemeContext.Provider value={value}>
+      {/* nền theme phủ toàn bộ: màn nào chưa tự đặt màu nền cũng không lộ nền mặc định */}
+      <View
+        style={{ flex: 1, backgroundColor: colors.background }}
+        onLayout={hideSplash}
+      >
+        {children}
+      </View>
+    </ThemeContext.Provider>
   );
 };
 

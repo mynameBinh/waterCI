@@ -2,7 +2,7 @@
   "expo": {
     "name": "Water check-in",
     "slug": "MyFirstApp",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "myfirstapp",
@@ -60,7 +60,8 @@
       "expo-font",
       "expo-image",
       "expo-web-browser",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

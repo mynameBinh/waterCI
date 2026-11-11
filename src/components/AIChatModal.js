@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { File as ExpoFile } from "expo-file-system";
+import { Camera } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -12,7 +13,9 @@ import {
   Easing,
   FlatList,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   ScrollView,
   SectionList,
@@ -20,12 +23,15 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../context/ThemeContext";
+import CameraOverlay from "./CameraOverlay";
 import ChatPlusSheet, { CHAT_MODELS } from "./ChatPlusSheet";
-import SmartCopySheet, { copyText } from "./SmartCopySheet";
+import SmartCopySheet from "./SmartCopySheet";
+import { FILE_TYPES, copyText, createFile, parseReply, replyText, shareFile } from "./chatFiles";
 
 // ▶ ẢNH ICON AI THEO THEME: mỗi màu accent trong ThemeContext ứng với 1 ảnh trong assets/ai-avata/.
 //   (Metro bắt buộc require phải ghi đường dẫn tĩnh nên phải liệt kê từng ảnh như dưới.)
@@ -63,10 +69,10 @@ const PICK_TYPES = ["image/*", "application/pdf", "text/*", DOCX_MIME];
 
 // Bấm vào gợi ý -> điền sẵn vào ô nhập để bạn sửa lại trước khi gửi
 const SUGGESTIONS = [
-  { icon: "school-outline", text: "Giải thích giúp em một khái niệm khó hiểu" },
-  { icon: "create-outline", text: "Giúp em viết một đoạn văn ngắn" },
-  { icon: "language-outline", text: "Dịch và sửa lỗi câu này giúp em" },
-  { icon: "bulb-outline", text: "Gợi ý cho em vài ý tưởng thú vị" },
+  { icon: "school-outline", text: "Giải thích một khái niệm khó hiểu" },
+  { icon: "create-outline", text: "Giúp viết một đoạn văn ngắn" },
+  { icon: "language-outline", text: "Dịch và sửa lỗi câu này" },
+  { icon: "bulb-outline", text: "Gợi ý một vài ý tưởng thú vị" },
 ];
 
 const PREFS_KEY = "ai_chat_prefs_v1";
@@ -92,6 +98,9 @@ const ModeChip = memo(function ModeChip({ icon, label, onClear, colors }) {
 // ── Hiển thị markdown gọn (đậm, nghiêng, `code`, tiêu đề, gạch đầu dòng, khối code) ──
 const MONO = Platform.OS === "ios" ? "Menlo" : "monospace";
 
+const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const splitCells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+
 const parseBlocks = (src) => {
   const lines = String(src || "").replace(/\r/g, "").split("\n");
   const out = [];
@@ -110,8 +119,15 @@ const parseBlocks = (src) => {
       i++;
       continue;
     }
+    if (line.includes("|") && i + 1 < lines.length && TABLE_SEP.test(lines[i + 1])) {
+      const rows = [splitCells(line)];
+      i += 2;
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) rows.push(splitCells(lines[i++]));
+      out.push({ t: "table", rows });
+      continue;
+    }
     let m;
-    if ((m = line.match(/^\s{0,3}#{1,4}\s+(.*)$/))) out.push({ t: "h", text: m[1] });
+    if ((m = line.match(/^\s{0,3}(#{1,4})\s+(.*)$/))) out.push({ t: "h", text: m[2], lvl: m[1].length });
     else if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) out.push({ t: "li", text: m[1], mark: "•" });
     else if ((m = line.match(/^\s*(\d+)[.)]\s+(.*)$/))) out.push({ t: "li", text: m[2], mark: `${m[1]}.` });
     else if ((m = line.match(/^>\s?(.*)$/))) out.push({ t: "quote", text: m[1] });
@@ -147,16 +163,12 @@ const RichText = memo(function RichText({ content, colors }) {
     <View>
       {blocks.map((b, i) => {
         const gap = i === 0 ? 0 : b.t === "li" ? 3 : 8;
-        if (b.t === "code")
-          return (
-            <View key={i} style={[styles.codeBlock, { marginTop: gap, backgroundColor: colors.background, borderColor: colors.border }]}>
-              <Text selectable style={[styles.codeText, { color: colors.text }]}>{b.text}</Text>
-            </View>
-          );
+        if (b.t === "code") return <CodeBlock key={i} text={b.text} colors={colors} gap={gap} />;
+        if (b.t === "table") return <TableView key={i} rows={b.rows} colors={colors} gap={gap} />;
         if (b.t === "h")
           return (
             <View key={i} style={{ marginTop: gap + 2 }}>
-              <Inline text={b.text} colors={colors} style={[base, { fontWeight: "800", fontSize: 16 }]} />
+              <Inline text={b.text} colors={colors} style={[base, { fontWeight: "800", fontSize: b.lvl === 1 ? 18 : b.lvl === 2 ? 16.5 : 15.5, lineHeight: 24 }]} />
             </View>
           );
         if (b.t === "li")
@@ -180,6 +192,192 @@ const RichText = memo(function RichText({ content, colors }) {
           </View>
         );
       })}
+    </View>
+  );
+});
+
+const CodeBlock = memo(function CodeBlock({ text, colors, gap }) {
+  const [ok, setOk] = useState(false);
+  return (
+    <View style={[styles.codeBlock, { marginTop: gap, backgroundColor: colors.background, borderColor: colors.border }]}>
+      <View style={styles.codeHead}>
+        <Text style={{ color: colors.textMuted, fontSize: 11.5, fontWeight: "700" }}>Code</Text>
+        <TouchableOpacity
+          hitSlop={8}
+          onPress={async () => {
+            if (await copyText(text)) {
+              setOk(true);
+              setTimeout(() => setOk(false), 1400);
+            }
+          }}
+          style={{ flexDirection: "row", alignItems: "center" }}
+        >
+          <Ionicons name={ok ? "checkmark" : "copy-outline"} size={14} color={ok ? colors.primary : colors.textMuted} />
+          <Text style={{ color: ok ? colors.primary : colors.textMuted, fontSize: 11.5, fontWeight: "700", marginLeft: 4 }}>
+            {ok ? "Đã chép" : "Sao chép"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} nestedScrollEnabled>
+        <Text selectable style={[styles.codeText, { color: colors.text }]}>{text}</Text>
+      </ScrollView>
+    </View>
+  );
+});
+
+const TableView = memo(function TableView({ rows, colors, gap }) {
+  const cols = Math.max(1, ...rows.map((r) => r.length));
+  const widths = Array.from({ length: cols }, (_, c) =>
+    Math.min(220, Math.max(76, Math.max(...rows.map((r) => String(r[c] || "").length)) * 7.4 + 24)),
+  );
+  return (
+    <View style={[styles.tableWrap, { marginTop: gap, borderColor: colors.border }]}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} nestedScrollEnabled>
+        <View>
+          {rows.map((r, ri) => (
+            <View
+              key={ri}
+              style={{
+                flexDirection: "row",
+                backgroundColor: ri === 0 ? colors.primarySoft : ri % 2 === 0 ? colors.background : "transparent",
+              }}
+            >
+              {widths.map((w, ci) => (
+                <Text
+                  key={ci}
+                  style={[
+                    styles.cell,
+                    {
+                      width: w,
+                      color: ri === 0 ? colors.primaryText : colors.text,
+                      fontWeight: ri === 0 ? "800" : "500",
+                      borderTopWidth: ri ? StyleSheet.hairlineWidth : 0,
+                      borderTopColor: colors.border,
+                    },
+                  ]}
+                >
+                  {String(r[ci] ?? "").replace(/\*\*/g, "")}
+                </Text>
+              ))}
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+});
+
+// Thẻ file do AI tạo (Word / Excel / ...) – bấm "Tải về" để tạo và chia sẻ
+const FileCard = memo(function FileCard({ file, colors, ctx }) {
+  const t = FILE_TYPES[file.fmt] || FILE_TYPES.txt;
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const lines = file.body.split("\n").filter((l) => l.trim()).length;
+
+  const run = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const f = await createFile({ ...ctx, format: file.fmt, title: file.name, content: file.body });
+      setBusy(false);
+      await shareFile(f);
+    } catch (e) {
+      setBusy(false);
+      Alert.alert("Không tạo được file", e?.message || "Bạn thử lại nhé.");
+    }
+  };
+
+  return (
+    <View style={[styles.fileBox, { backgroundColor: colors.background, borderColor: colors.border }]}>
+      <TouchableOpacity activeOpacity={0.8} onPress={() => setOpen((v) => !v)} style={styles.fileBoxTop}>
+        <View style={[styles.fileTile, { backgroundColor: colors.primarySoft }]}>
+          <Ionicons name={t.icon} size={22} color={colors.primary} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text numberOfLines={1} style={[styles.fileBoxName, { color: colors.text }]}>
+            {file.name}.{t.ext}
+          </Text>
+          <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
+            {t.label} · {lines} dòng · {open ? "Thu gọn" : "Xem trước"}
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={run}
+          disabled={busy}
+          activeOpacity={0.85}
+          style={[styles.fileDl, { backgroundColor: colors.primary, opacity: busy ? 0.7 : 1 }]}
+          accessibilityRole="button"
+          accessibilityLabel={`Tải file ${t.label}`}
+        >
+          {busy ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <>
+              <Ionicons name="download-outline" size={16} color="#fff" />
+              <Text style={styles.fileDlText}>Tải về</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </TouchableOpacity>
+      {open && (
+        <View style={[styles.filePreview, { borderTopColor: colors.border }]}>
+          <ScrollView style={{ maxHeight: 260 }} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+            <RichText content={file.body} colors={colors} />
+          </ScrollView>
+        </View>
+      )}
+    </View>
+  );
+});
+
+const balance = (s) => {
+  if ((s.match(/```/g) || []).length % 2) return s + "\n```";
+  if ((s.match(/\*\*/g) || []).length % 2) return s + "**";
+  return s;
+};
+
+// Nội dung câu trả lời của AI: chữ "gõ ra" dần (như Claude / ChatGPT) + thẻ file
+const AssistantBody = memo(function AssistantBody({ content, fresh, colors, ctx, onDone }) {
+  const parsed = useMemo(() => parseReply(content), [content]);
+  const total = useMemo(
+    () => parsed.segments.reduce((n, s) => n + (s.type === "text" ? s.text.length : 0), 0),
+    [parsed],
+  );
+  const [n, setN] = useState(fresh ? 0 : total);
+  const doneRef = useRef(!fresh);
+
+  useEffect(() => {
+    if (!fresh) return undefined;
+    if (n >= total) {
+      if (!doneRef.current) {
+        doneRef.current = true;
+        onDone?.();
+      }
+      return undefined;
+    }
+    const step = Math.max(3, Math.ceil(total / 70)); // dài mấy cũng gõ xong trong ~1.5s
+    const id = setTimeout(() => setN((v) => Math.min(total, v + step)), 22);
+    return () => clearTimeout(id);
+  }, [n, total, fresh]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  let remaining = fresh ? n : total;
+  const out = [];
+  parsed.segments.forEach((s, i) => {
+    if (s.type === "text") {
+      const take = Math.max(0, remaining);
+      remaining -= s.text.length;
+      if (take > 0) out.push(<RichText key={i} content={take >= s.text.length ? s.text : balance(s.text.slice(0, take))} colors={colors} />);
+    } else if (remaining >= 0) {
+      out.push(<FileCard key={i} file={s} colors={colors} ctx={ctx} />);
+    }
+  });
+  return (
+    <View>
+      {out.map((el, i) => (
+        <View key={el.key} style={{ marginTop: i ? 10 : 0 }}>
+          {el}
+        </View>
+      ))}
     </View>
   );
 });
@@ -247,7 +445,11 @@ const AIChatModal = memo(function AIChatModal({
   token,
   apiBase,
   authFetch,
-  onDockTarget, // báo toạ độ avatar ở header để nút AI nổi bay tới đứng đó (null khi đã đóng xong)
+  origin, // { x, y } tâm nút AI nổi lúc bấm -> khung chat bung ra từ chính chỗ đó
+  onMountedChange, // báo khung chat đang hiện (để ẩn nút AI nổi, tránh đè lên)
+  appeal, // { id, kind, uri, text, status, expiresAt, containerType, maxVolume } | null — check-in bị từ chối đang chờ giải thích
+  onAppealChange, // (appeal | null) => void — báo trạng thái mới (approved) hoặc null (bị từ chối / hết hạn)
+  onAppealApproved, // (appeal) => void — user bấm nút sau khi AI duyệt (Dashboard mở bảng chọn ml / ghi nhận mục tiêu)
 }) {
   const { colors } = useTheme();
   const avatar = useAiAvatar();
@@ -266,17 +468,34 @@ const AIChatModal = memo(function AIChatModal({
   const [histQuery, setHistQuery] = useState("");
   const [plusOpen, setPlusOpen] = useState(false); // bảng "+" (ảnh / tệp / tìm kiếm / suy nghĩ / model)
   const [copyMsg, setCopyMsg] = useState(null); // tin nhắn đang mở "sao chép thông minh"
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [camOpen, setCamOpen] = useState(false); // khung camera check-in (dùng chung với màn hình chính)
+  const { width: winW, height: winH } = useWindowDimensions();
+  const [focused, setFocused] = useState(false);
+  const atBottomRef = useRef(true);
   const [copiedId, setCopiedId] = useState(null); // hiện dấu ✓ sau khi bấm "Sao chép"
   const [prefs, setPrefs] = useState(DEFAULT_PREFS);
   const [sendLabel, setSendLabel] = useState("Đang trả lời…");
   const convIdRef = useRef(null);
   convIdRef.current = convId;
+  // ── Khiếu nại check-in bị từ chối ──
+  const [inAppeal, setInAppeal] = useState(false); // cuộc trò chuyện hiện tại nối tiếp thông báo lỗi check-in
+  const inAppealRef = useRef(false);
+  inAppealRef.current = inAppeal;
+  const appealRef = useRef(appeal);
+  appealRef.current = appeal;
+  const seededRef = useRef(null); // id khiếu nại đã được đưa vào khung chat
   const listRef = useRef(null);
   const idRef = useRef(0);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
   const nextId = () => `m${++idRef.current}`;
+  const exportCtx = useMemo(() => ({ apiBase, token, authFetch }), [apiBase, token, authFetch]);
+  const markDone = useCallback(
+    (id) => setMessages((prev) => prev.map((m) => (m.id === id && m.fresh ? { ...m, fresh: false } : m))),
+    [],
+  );
 
   // Nhớ lựa chọn model / tìm kiếm / suy nghĩ giữa các lần mở app
   useEffect(() => {
@@ -309,68 +528,150 @@ const AIChatModal = memo(function AIChatModal({
     if (visible) scrollToEnd();
   }, [visible, scrollToEnd]);
 
-  // ── Hiệu ứng kiểu bong bóng Messenger ──────────────────────────────────────
-  //  Bấm nút nổi -> nút bay lên đứng ở vị trí avatar header, khung chat "bung" xuống từ chính chỗ đó.
-  //  Đóng -> khung chat co ngược lại vào avatar, xong thì nút bay về chỗ cũ.
+  // Có check-in bị từ chối đang chờ -> chat mở ra NỐI TIẾP câu thông báo của Tiểu Đậu (kèm ảnh vừa chụp).
+  // Ảnh gốc nằm tạm trên server nên các lượt sau KHÔNG gửi lại ảnh, chỉ gửi lời giải thích.
+  useEffect(() => {
+    if (!visible || !appeal || seededRef.current === appeal.id || sending) return;
+    seededRef.current = appeal.id;
+    setInAppeal(true);
+    setConvId(null);
+    setPending([]);
+    setInput("");
+    setPanel(null);
+    setMessages([
+      {
+        id: nextId(),
+        role: "assistant",
+        content: appeal.text || "Em chưa nhận ra ảnh check-in này, kể em nghe được khom nè?",
+        files: appeal.uri ? [{ name: "anh-check-in.jpg", uri: appeal.uri }] : [],
+        note:
+          appeal.status === "approved"
+            ? "✅ Em đã duyệt roi đó, bấm nút chọn ml dưới để check bù nhé."
+            : "💛 Lý do gì nè, kể em nghe.",
+        appealCard: appeal.status === "approved",
+        appealId: appeal.id,
+      },
+    ]);
+    atBottomRef.current = true;
+    scrollToEnd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, appeal?.id]);
+
+// ── Hiệu ứng mở / đóng ─────────────────────────────────────────────────────
+  //  Bấm nút nổi -> khung chat "bung" ra từ ĐÚNG vị trí nút (spring nhẹ, bo góc tròn -> vuông),
+  //  nội dung hiện sau một nhịp để chữ không bị méo khi đang phóng to. Đóng -> co ngược về nút.
+  //  Nút nổi tự ẩn khi chat đang mở (onMountedChange) nên không còn đè lên Lịch sử / Ghi nhớ.
   const [mounted, setMounted] = useState(false);
   const mountedRef = useRef(false);
   mountedRef.current = mounted;
-  const progress = useRef(new Animated.Value(0)).current; // 0 = thu vào avatar, 1 = mở hết
-  const radius = useRef(new Animated.Value(0)).current; // bo góc: tròn khi nhỏ, vuông khi mở hết
-  const anchor = { x: 12 + 36 + 8 + 19, y: insets.top + 8 + 19, size: 38 }; // tâm avatar ở header
+  const progress = useRef(new Animated.Value(0)).current; // 0 = thu vào nút, 1 = mở hết
+  const radius = useRef(new Animated.Value(0)).current; // bo góc (JS driver)
+  const swipeX = useRef(new Animated.Value(0)).current; // kéo từ mép trái để quay lại
+  // Các phép nội suy chỉ tạo MỘT LẦN (không tạo lại mỗi lần render -> hết nhấp nháy khi component render lại giữa lúc đang mở).
+  // Dùng extrapolate "clamp" vì spring có thể vọt quá 1 một chút: không clamp thì opacity > 1 / vị trí lệch -> chớp.
+  const anim = useMemo(
+    () => ({
+      wrapOpacity: progress.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 1, 1], extrapolate: "clamp" }),
+      wrapScale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.18, 1] }), // cho phép vọt nhẹ quá 1 -> hiệu ứng nảy
+      bodyOpacity: progress.interpolate({ inputRange: [0, 0.55, 1], outputRange: [0, 0, 1], extrapolate: "clamp" }),
+      headerY: progress.interpolate({ inputRange: [0, 0.4, 0.9], outputRange: [-18, -18, 0], extrapolate: "clamp" }),
+      composerY: progress.interpolate({ inputRange: [0, 0.5, 0.95], outputRange: [28, 28, 0], extrapolate: "clamp" }),
+      radius: radius.interpolate({ inputRange: [0, 1], outputRange: [120, 0], extrapolate: "clamp" }),
+    }),
+    [progress, radius],
+  );
+  const [opening, setOpening] = useState(false); // đang chạy hiệu ứng mở/đóng -> gộp cả khung thành 1 texture để không chớp
+  const ox = origin?.x ?? winW - 40;
+  const oy = origin?.y ?? winH - 160;
 
   useEffect(() => {
     if (visible) {
       setMounted(true);
+      requestAnimationFrame(() => onMountedChange?.(true)); // Dashboard render lại nặng: để sau khung hình đầu cho animation chạy trước
+      swipeX.setValue(0);
       progress.setValue(0);
       radius.setValue(0);
-      Animated.sequence([
-        Animated.delay(150), // chờ nút bay lên một nhịp rồi mới bung xuống
-        Animated.parallel([
-          Animated.timing(progress, { toValue: 1, duration: 360, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(radius, { toValue: 1, duration: 360, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
-        ]),
-      ]).start();
-    } else if (mountedRef.current) {
+      setOpening(true);
       Animated.parallel([
-        Animated.timing(progress, { toValue: 0, duration: 240, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(radius, { toValue: 0, duration: 240, easing: Easing.in(Easing.cubic), useNativeDriver: false }),
+        Animated.spring(progress, { toValue: 1, useNativeDriver: true, damping: 18, stiffness: 190, mass: 0.95 }),
+        Animated.timing(radius, { toValue: 1, duration: 340, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
+      ]).start(() => setOpening(false));
+    } else if (mountedRef.current) {
+      setOpening(true);
+      Animated.parallel([
+        Animated.timing(progress, { toValue: 0, duration: 230, easing: Easing.bezier(0.4, 0, 0.9, 0.4), useNativeDriver: true }),
+        Animated.timing(radius, { toValue: 0, duration: 230, easing: Easing.in(Easing.cubic), useNativeDriver: false }),
       ]).start(({ finished }) => {
+        setOpening(false);
         if (finished) {
           setMounted(false);
-          onDockTarget?.(null); // thu xong -> nút AI bay về vị trí cũ
+          swipeX.setValue(0);
+          onMountedChange?.(false);
         }
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
-  useEffect(() => {
-    if (visible) onDockTarget?.(anchor);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, insets.top]);
+  useEffect(() => () => onMountedChange?.(false), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => () => onDockTarget?.(null), []); // eslint-disable-line react-hooks/exhaustive-deps
+  // "Quay lại" theo từng lớp: bảng "+" -> sao chép thông minh -> Lịch sử/Ghi nhớ -> đóng chat.
+  // Dùng chung cho nút Back Android, vuốt từ mép trái (iPhone) và nút ‹.
+  const layerOpen = camOpen || plusOpen || copyOpen || !!panel;
+  const goBack = useCallback(() => {
+    if (camOpen) setCamOpen(false);
+    else if (plusOpen) setPlusOpen(false);
+    else if (copyOpen) setCopyOpen(false);
+    else if (panel) setPanel(null);
+    else onClose?.();
+  }, [camOpen, plusOpen, copyOpen, panel, onClose]);
+  const goBackRef = useRef(goBack);
+  goBackRef.current = goBack;
+  const layerOpenRef = useRef(layerOpen);
+  layerOpenRef.current = layerOpen;
+  const winWRef = useRef(winW);
+  winWRef.current = winW;
 
-  // Nút Back của Android: đóng bảng phụ trước, rồi mới đóng khung chat
+  const edgePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dx > 6 && Math.abs(g.dy) < g.dx,
+      onPanResponderMove: (_, g) => swipeX.setValue(Math.max(0, g.dx)),
+      onPanResponderRelease: (_, g) => {
+        const commit = g.dx > 80 || g.vx > 0.55;
+        if (!commit) {
+          Animated.spring(swipeX, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 260 }).start();
+        } else if (layerOpenRef.current) {
+          Animated.spring(swipeX, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 260 }).start();
+          goBackRef.current();
+        } else {
+          Animated.timing(swipeX, { toValue: winWRef.current, duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(() =>
+            goBackRef.current(),
+          );
+        }
+      },
+      onPanResponderTerminate: () =>
+        Animated.spring(swipeX, { toValue: 0, useNativeDriver: true }).start(),
+    }),
+  ).current;
+
+  // Nút Back của Android
   useEffect(() => {
     if (!visible) return undefined;
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (plusOpen) setPlusOpen(false);
-      else if (copyMsg) setCopyMsg(null);
-      else if (panel) setPanel(null);
-      else onClose?.();
+      goBackRef.current();
       return true;
     });
     return () => sub.remove();
-  }, [visible, plusOpen, copyMsg, panel, onClose]);
+  }, [visible]);
 
   // Đóng các bảng phụ khi đóng khung chat
   useEffect(() => {
     if (!visible) {
       setPanel(null);
       setPlusOpen(false);
-      setCopyMsg(null);
+      setCopyOpen(false);
+      setCamOpen(false);
     }
   }, [visible]);
 
@@ -442,6 +743,8 @@ const AIChatModal = memo(function AIChatModal({
           })),
         );
         setConvId(id);
+        setInAppeal(false);
+        seededRef.current = null;
         setPending([]);
         setPanel(null);
       } catch (e) {
@@ -491,7 +794,7 @@ const AIChatModal = memo(function AIChatModal({
   );
 
   const clearMemory = useCallback(() => {
-    Alert.alert("Quên tất cả?", "Tiểu Đậu sẽ không còn nhớ điều nào về chị nữa.", [
+    Alert.alert("Quên tất cả?", "Tiểu Đậu sẽ không còn nhớ gì nữa!.", [
       { text: "Huỷ", style: "cancel" },
       {
         text: "Quên hết",
@@ -578,17 +881,47 @@ const AIChatModal = memo(function AIChatModal({
     }
   }, [sending, pending.length]);
 
+  // Mở khung camera check-in (cùng giao diện với màn hình chính, nhưng to hơn) rồi đính kèm ảnh vừa chụp
+  const takePhoto = useCallback(async () => {
+    if (sending) return;
+    if (MAX_FILES - pending.length <= 0) {
+      Alert.alert("Đã đủ tệp", `Mỗi lượt chỉ đính kèm tối đa ${MAX_FILES} tệp.`);
+      return;
+    }
+    try {
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Cần quyền Camera", "Bạn cho phép ứng dụng dùng camera trong Cài đặt để chụp ảnh gửi cho Tiểu Đậu nhé.");
+        return;
+      }
+      Keyboard.dismiss();
+      setCamOpen(true);
+    } catch (e) {
+      Alert.alert("Không mở được camera", e?.message || "Bạn kiểm tra quyền camera rồi thử lại nhé.");
+    }
+  }, [sending, pending.length]);
+
+  const handleCamPicture = useCallback((uri) => {
+    setCamOpen(false);
+    if (!uri) return;
+    setPending((p) =>
+      p.length >= MAX_FILES ? p : [...p, { name: `chup-${Date.now()}.jpg`, mime: "image/jpeg", size: 0, uri }],
+    );
+  }, []);
+  const handleCamClose = useCallback(() => setCamOpen(false), []);
+
   // Sao chép nhanh toàn bộ câu trả lời
   const quickCopy = useCallback(async (item) => {
-    const ok = await copyText(item.content);
+    const ok = await copyText(replyText(item.content));
     if (!ok) return;
     setCopiedId(item.id);
     setTimeout(() => setCopiedId((c) => (c === item.id ? null : c)), 1500);
   }, []);
 
   // ── Gửi ───────────────────────────────────────────────────────────────────
-  const send = useCallback(async () => {
-    const text = input.trim();
+  const send = useCallback(async (override) => {
+    const fromChip = typeof override === "string";
+    const text = (fromChip ? override : input).trim();
     if ((!text && pending.length === 0) || sending) return;
 
     setSending(true);
@@ -614,8 +947,9 @@ const AIChatModal = memo(function AIChatModal({
       };
       const history = [...messagesRef.current, userMsg];
       setMessages(history);
-      setInput("");
+      if (!fromChip) setInput("");
       setPending([]);
+      atBottomRef.current = true;
       scrollToEnd();
 
       // Bỏ tin lỗi, lấy MAX_SEND tin gần nhất; chỉ giữ MAX_FILES tệp mới nhất
@@ -648,10 +982,13 @@ const AIChatModal = memo(function AIChatModal({
           model: prefs.model,
           thinking: prefs.thinking,
           web_search: prefs.webSearch,
+          // đang giải thích cho check-in bị từ chối -> server tự đính kèm lại ảnh tạm cho AI xem
+          appeal_id: inAppealRef.current && appealRef.current?.status === "open" ? appealRef.current.id : undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        if (res.status === 410 && inAppealRef.current) onAppealChange?.(null); // ảnh tạm đã hết hạn / khiếu nại đã đóng
         const detail =
           typeof data?.detail === "string"
             ? data.detail
@@ -671,9 +1008,31 @@ const AIChatModal = memo(function AIChatModal({
         )
         .filter(Boolean)
         .join("\n");
+      // Quyết định của AI về khiếu nại: duyệt -> hiện nút chọn ml / xác nhận; từ chối -> đóng khiếu nại
+      const ap = data.appeal && appealRef.current && data.appeal.id === appealRef.current.id ? data.appeal : null;
+      if (ap) {
+        if (ap.status === "rejected") onAppealChange?.(null);
+        else
+          onAppealChange?.({
+            ...appealRef.current,
+            status: ap.status,
+            goodwill: !!ap.goodwill,
+            containerType: ap.container_type || appealRef.current.containerType,
+            maxVolume: ap.max_volume || appealRef.current.maxVolume,
+            expiresAt: Date.now() + Math.max(0, (ap.expires_in || 0) - 20) * 1000,
+          });
+      }
       setMessages((prev) => [
         ...prev,
-        { id: nextId(), role: "assistant", content: data.reply, note },
+        {
+          id: nextId(),
+          role: "assistant",
+          content: data.reply,
+          note,
+          fresh: true,
+          appealCard: ap?.status === "approved",
+          appealId: ap?.id,
+        },
       ]);
     } catch (e) {
       setMessages((prev) => [
@@ -689,7 +1048,7 @@ const AIChatModal = memo(function AIChatModal({
       setSending(false);
       scrollToEnd();
     }
-  }, [input, pending, sending, prefs, authFetch, apiBase, token, scrollToEnd]);
+  }, [input, pending, sending, prefs, authFetch, apiBase, token, scrollToEnd, onAppealChange]);
 
   // Bắt đầu cuộc trò chuyện mới (cuộc cũ vẫn nằm trong Lịch sử)
   const newChat = useCallback(() => {
@@ -697,18 +1056,24 @@ const AIChatModal = memo(function AIChatModal({
     setMessages([]);
     setPending([]);
     setConvId(null);
+    setInAppeal(false);
+    seededRef.current = null; // mở lại chat vẫn có thể quay về khiếu nại còn hạn
     setPanel(null);
   }, [sending]);
 
   const renderItem = useCallback(
     ({ item, index }) => {
       const mine = item.role === "user";
-      const canCopy = !mine && !item.isError && !!item.content;
+      const canCopy = !mine && !item.isError && !!item.content && !item.fresh;
       const copied = copiedId === item.id;
       const prev = messages[index - 1];
       const next = messages[index + 1];
       const firstOfGroup = !prev || prev.role !== item.role;
       const lastOfGroup = !next || next.role !== item.role;
+      const nextQs =
+        !mine && !item.isError && !item.fresh && index === messages.length - 1 && !sending && item.content
+          ? parseReply(item.content).next
+          : [];
       return (
         <View
           style={[
@@ -723,7 +1088,7 @@ const AIChatModal = memo(function AIChatModal({
             ) : (
               <View style={styles.msgAvatarSpacer} />
             ))}
-          <View style={[styles.msgCol, { alignItems: mine ? "flex-end" : "flex-start" }]}>
+          <View style={[styles.msgCol, { alignItems: mine ? "flex-end" : "flex-start", maxWidth: mine ? "82%" : "92%" }]}>
             <View
               style={[
                 styles.bubble,
@@ -792,7 +1157,13 @@ const AIChatModal = memo(function AIChatModal({
                     {item.content}
                   </Text>
                 ) : (
-                  <RichText content={item.content} colors={colors} />
+                  <AssistantBody
+                    content={item.content}
+                    fresh={!!item.fresh}
+                    colors={colors}
+                    ctx={exportCtx}
+                    onDone={() => markDone(item.id)}
+                  />
                 ))}
               {!!item.note && (
                 <View style={[styles.noteBox, { backgroundColor: colors.primarySoft }]}>
@@ -800,6 +1171,28 @@ const AIChatModal = memo(function AIChatModal({
                 </View>
               )}
             </View>
+
+            {!mine && item.appealCard && !item.fresh && appeal?.status === "approved" && appeal.id === item.appealId && appeal.goodwill && (
+              <View style={[styles.noteBox, { backgroundColor: colors.primarySoft, alignSelf: "flex-start" }]}>
+                <Text style={[styles.noteText, { color: colors.primaryText }]}>
+                  🎁 Cơ hội đặc biệt hôm nay{appeal.kind === "water" && appeal.maxVolume ? ` · tối đa ${appeal.maxVolume} ml` : ""}
+                </Text>
+              </View>
+            )}
+            {!mine && item.appealCard && !item.fresh && appeal?.status === "approved" && appeal.id === item.appealId && (
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => onAppealApproved?.(appeal)}
+                style={[styles.appealBtn, { backgroundColor: colors.primary }]}
+                accessibilityRole="button"
+                accessibilityLabel={appeal.kind === "water" ? "Chọn lượng nước và gửi bù" : "Xác nhận hoàn thành mục tiêu"}
+              >
+                <Ionicons name={appeal.kind === "water" ? "water" : "checkmark-circle"} size={18} color="#ffffff" />
+                <Text style={styles.appealBtnText}>
+                  {appeal.kind === "water" ? "Chọn lượng nước & gửi bù" : "Xác nhận hoàn thành mục tiêu"}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {canCopy && lastOfGroup && (
               <View style={styles.actionRow}>
@@ -820,7 +1213,10 @@ const AIChatModal = memo(function AIChatModal({
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  onPress={() => setCopyMsg(item)}
+                  onPress={() => {
+                    setCopyMsg(item);
+                    setCopyOpen(true);
+                  }}
                   hitSlop={8}
                   style={styles.actionBtn}
                   accessibilityRole="button"
@@ -831,11 +1227,26 @@ const AIChatModal = memo(function AIChatModal({
                 </TouchableOpacity>
               </View>
             )}
+            {nextQs.length > 0 && (
+              <View style={styles.nextWrap}>
+                {nextQs.map((q) => (
+                  <TouchableOpacity
+                    key={q}
+                    activeOpacity={0.8}
+                    onPress={() => send(q)}
+                    style={[styles.nextChip, { backgroundColor: colors.card, borderColor: colors.primaryBorder }]}
+                  >
+                    <Ionicons name="arrow-forward-circle-outline" size={16} color={colors.primary} />
+                    <Text numberOfLines={2} style={[styles.nextText, { color: colors.text }]}>{q}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
           </View>
         </View>
       );
     },
-    [colors, avatar, copiedId, quickCopy, messages],
+    [colors, avatar, copiedId, quickCopy, messages, sending, send, exportCtx, markDone, appeal, onAppealApproved],
   );
 
   const empty = (
@@ -843,9 +1254,9 @@ const AIChatModal = memo(function AIChatModal({
       <View style={[styles.emptyGlow, { backgroundColor: colors.primarySoft }]}>
         <Image source={avatar} style={styles.emptyAvatar} />
       </View>
-      <Text style={[styles.emptyTitle, { color: colors.text }]}>Chào chị, em là Tiểu Đậu 🥰</Text>
+      <Text style={[styles.emptyTitle, { color: colors.text }]}>Tiểu Đậu có mặt🥰</Text>
       <Text style={[styles.emptySub, { color: colors.textMuted }]}>
-        Chị có thể hỏi em về học tập, giải trí, hay nhờ em tạo nội dung. Em sẽ trả lời nhanh nhất có thể.
+        hỏi em về học tập, giải trí, hay nhờ em tạo nội dung. Em sẽ trả lời nhanh nhất có thể.
       </Text>
       <View style={styles.sugGrid}>
         {SUGGESTIONS.map((s) => (
@@ -876,12 +1287,17 @@ const AIChatModal = memo(function AIChatModal({
   return (
     <View style={styles.host}>
       <Animated.View
+        renderToHardwareTextureAndroid={opening}
+        shouldRasterizeIOS={opening}
         style={[
           styles.fill,
           {
-            opacity: progress.interpolate({ inputRange: [0, 0.35, 1], outputRange: [0, 1, 1] }),
-            transform: [{ scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.12, 1] }) }],
-            transformOrigin: [anchor.x, anchor.y, 0], // mảng bắt buộc đủ 3 giá trị [x, y, z]
+            opacity: anim.wrapOpacity,
+            transform: [
+              { translateX: swipeX },
+              { scale: anim.wrapScale },
+            ],
+            transformOrigin: [ox, oy, 0],
           },
         ]}
       >
@@ -891,18 +1307,22 @@ const AIChatModal = memo(function AIChatModal({
             {
               overflow: "hidden",
               backgroundColor: colors.background,
-              borderRadius: radius.interpolate({ inputRange: [0, 1], outputRange: [90, 0] }),
+              borderRadius: anim.radius,
             },
           ]}
         >
+      <Animated.View
+        style={{ flex: 1, opacity: anim.bodyOpacity }}
+      >
       <KeyboardAvoidingView
         style={[styles.container, { backgroundColor: colors.background }]}
         behavior={Platform.OS === "ios" ? "padding" : "height"}
       >
         {/* Header */}
-        <View
+        <Animated.View
           style={[
             styles.header,
+            { transform: [{ translateY: anim.headerY }] },
             { paddingTop: insets.top + 8, backgroundColor: colors.card, borderBottomColor: colors.border },
           ]}
         >
@@ -915,15 +1335,15 @@ const AIChatModal = memo(function AIChatModal({
           >
             <Ionicons name="chevron-down" size={26} color={colors.text} />
           </TouchableOpacity>
-          {onDockTarget ? (
-            <View style={styles.headerAvatar} /> // chỗ trống cho nút AI nổi bay tới
-          ) : (
-            <Image source={avatar} style={styles.headerAvatar} />
-          )}
+          <Image source={avatar} style={styles.headerAvatar} />
           <View style={{ flex: 1 }}>
             <Text numberOfLines={1} style={[styles.headerTitle, { color: colors.text }]}>Tiểu Đậu</Text>
             <Text numberOfLines={1} style={[styles.headerSub, { color: colors.textMuted }]}>
-              {sending ? sendLabel : "Hỏi đáp · Học tập · Tạo nội dung"}
+              {sending
+                ? sendLabel
+                : inAppeal && appeal?.status === "open"
+                  ? "Đang xem lại ảnh check-in"
+                  : "Hỏi đáp · Học tập · Tạo nội dung"}
             </Text>
           </View>
           <TouchableOpacity
@@ -958,7 +1378,7 @@ const AIChatModal = memo(function AIChatModal({
               color={sending || (messages.length === 0 && !convId) ? colors.border : colors.textMuted}
             />
           </TouchableOpacity>
-        </View>
+        </Animated.View>
 
         {/* Danh sách tin nhắn */}
         <FlatList
@@ -970,7 +1390,12 @@ const AIChatModal = memo(function AIChatModal({
           contentContainerStyle={styles.listContent}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
-          onContentSizeChange={scrollToEnd}
+          onContentSizeChange={() => atBottomRef.current && scrollToEnd()}
+          onScroll={(e) => {
+            const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+            atBottomRef.current = contentOffset.y + layoutMeasurement.height >= contentSize.height - 140;
+          }}
+          scrollEventThrottle={32}
           showsVerticalScrollIndicator={false}
           ListFooterComponent={
             sending ? (
@@ -997,142 +1422,164 @@ const AIChatModal = memo(function AIChatModal({
           }
         />
 
-        {/* Tệp đã chọn (chưa gửi): ảnh hiện thumbnail lớn, tệp hiện thẻ nhỏ */}
-        {pending.length > 0 && (
-          <View style={[styles.pendingBar, { backgroundColor: colors.card }]}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              {pending.map((f, i) => {
-                const isImg = f.mime?.startsWith("image/");
-                return (
-                  <View key={`${f.name}-${i}`} style={styles.pendingItem}>
-                    {isImg ? (
-                      <Image source={{ uri: f.uri }} style={[styles.pendingImg, { borderColor: colors.border }]} />
-                    ) : (
-                      <View
-                        style={[
-                          styles.pendingFile,
-                          { backgroundColor: colors.primarySoft, borderColor: colors.primaryBorder },
-                        ]}
-                      >
-                        <Ionicons name="document-text-outline" size={22} color={colors.primary} />
-                        <Text numberOfLines={2} style={[styles.pendingFileText, { color: colors.primary }]}>
-                          {f.name}
-                        </Text>
-                      </View>
-                    )}
-                    <TouchableOpacity
-                      onPress={() => removePending(i)}
-                      hitSlop={8}
-                      style={styles.pendingX}
-                      accessibilityRole="button"
-                      accessibilityLabel="Bỏ tệp"
-                    >
-                      <Ionicons name="close" size={13} color="#ffffff" />
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-            </ScrollView>
-          </View>
-        )}
-
-        {/* Chế độ đang bật (tìm kiếm / suy nghĩ / model) */}
-        {(prefs.webSearch || prefs.thinking || prefs.model !== "fast") && (
-          <View style={[styles.modeBar, { backgroundColor: colors.card }]}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              {prefs.webSearch && (
-                <ModeChip icon="globe-outline" label="Tìm kiếm web" colors={colors} onClear={() => updatePrefs({ webSearch: false })} />
-              )}
-              {prefs.thinking && (
-                <ModeChip icon="bulb-outline" label="Suy nghĩ sâu" colors={colors} onClear={() => updatePrefs({ thinking: false })} />
-              )}
-              {prefs.model !== "fast" && (
-                <ModeChip
-                  icon={CHAT_MODELS.find((m) => m.key === prefs.model)?.icon || "options-outline"}
-                  label={CHAT_MODELS.find((m) => m.key === prefs.model)?.label || ""}
-                  colors={colors}
-                  onClear={() => updatePrefs({ model: "fast" })}
-                />
-              )}
-            </ScrollView>
-          </View>
-        )}
-
-        {/* Ô nhập: [+] [ảnh] [ô chat] [gửi] */}
-        <View
-          style={[
-            styles.inputBar,
-            {
-              backgroundColor: colors.card,
-              borderTopColor: colors.border,
-              paddingBottom: Math.max(insets.bottom, 10),
-            },
-          ]}
-        >
-          <TouchableOpacity
-            onPress={() => setPlusOpen(true)}
-            disabled={sending}
-            hitSlop={6}
-            activeOpacity={0.7}
-            style={[styles.roundBtn, { backgroundColor: colors.primarySoft }]}
-            accessibilityRole="button"
-            accessibilityLabel="Thêm tệp và công cụ"
-          >
-            <Ionicons name="add" size={24} color={sending ? colors.border : colors.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={pickFromLibrary}
-            disabled={sending || attachFull}
-            hitSlop={6}
-            activeOpacity={0.7}
-            style={[styles.roundBtn, { backgroundColor: colors.primarySoft, marginLeft: 6 }]}
-            accessibilityRole="button"
-            accessibilityLabel="Thêm ảnh từ thư viện"
-          >
-            <Ionicons
-              name="image-outline"
-              size={21}
-              color={sending || attachFull ? colors.border : colors.primary}
-            />
-          </TouchableOpacity>
-          <TextInput
+        {/* Ô soạn tin: thẻ bo tròn, ô nhập ở trên – hàng công cụ ở dưới, giãn cách thoáng */}
+        <Animated.View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, 10), transform: [{ translateY: anim.composerY }] }]}>
+          <View
             style={[
-              styles.input,
-              { color: colors.text, backgroundColor: colors.background, borderColor: colors.border },
+              styles.composer,
+              {
+                backgroundColor: colors.card,
+                borderColor: focused ? colors.primaryBorder : colors.border,
+              },
             ]}
-            value={input}
-            onChangeText={setInput}
-            placeholder="Nhắn cho Tiểu Đậu…"
-            placeholderTextColor={colors.textMuted}
-            multiline
-            maxLength={MAX_INPUT}
-            editable={!sending}
-          />
-          <TouchableOpacity
-            onPress={send}
-            disabled={!canSend}
-            activeOpacity={0.8}
-            style={[styles.sendBtn, { backgroundColor: canSend ? colors.primary : colors.border }]}
-            accessibilityRole="button"
-            accessibilityLabel="Gửi"
           >
-            <Ionicons name="arrow-up" size={22} color="#ffffff" />
-          </TouchableOpacity>
-        </View>
+            {pending.length > 0 && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                style={styles.pendingScroll}
+              >
+                {pending.map((f, i) => {
+                  const isImg = f.mime?.startsWith("image/");
+                  return (
+                    <View key={`${f.name}-${i}`} style={styles.pendingItem}>
+                      {isImg ? (
+                        <Image source={{ uri: f.uri }} style={[styles.pendingImg, { borderColor: colors.border }]} />
+                      ) : (
+                        <View
+                          style={[
+                            styles.pendingFile,
+                            { backgroundColor: colors.primarySoft, borderColor: colors.primaryBorder },
+                          ]}
+                        >
+                          <Ionicons name="document-text-outline" size={22} color={colors.primary} />
+                          <Text numberOfLines={2} style={[styles.pendingFileText, { color: colors.primary }]}>
+                            {f.name}
+                          </Text>
+                        </View>
+                      )}
+                      <TouchableOpacity
+                        onPress={() => removePending(i)}
+                        hitSlop={8}
+                        style={styles.pendingX}
+                        accessibilityRole="button"
+                        accessibilityLabel="Bỏ tệp"
+                      >
+                        <Ionicons name="close" size={13} color="#ffffff" />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            )}
 
-        {plusOpen && (
-          <ChatPlusSheet
-            prefs={prefs}
-            onChangePrefs={updatePrefs}
-            attachFull={pending.length >= MAX_FILES}
-            onClose={() => setPlusOpen(false)}
-            onPickFile={() => {
-              setPlusOpen(false);
-              pickFiles();
-            }}
-          />
-        )}
-        {!!copyMsg && <SmartCopySheet text={copyMsg.content} onClose={() => setCopyMsg(null)} />}
+            <TextInput
+              style={[styles.input, { color: colors.text }]}
+              value={input}
+              onChangeText={setInput}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              placeholder={inAppeal && appeal?.status === "open" ? "Giải thích với Tiểu Đậu…" : "Nhắn cho Tiểu Đậu…"}
+              placeholderTextColor={colors.textMuted}
+              multiline
+              maxLength={MAX_INPUT}
+              editable={!sending}
+            />
+
+            <View style={styles.composerBar}>
+              <TouchableOpacity
+                onPress={() => setPlusOpen(true)}
+                disabled={sending}
+                hitSlop={6}
+                activeOpacity={0.7}
+                style={[styles.toolBtn, { backgroundColor: colors.primarySoft }]}
+                accessibilityRole="button"
+                accessibilityLabel="Thêm tệp và công cụ"
+              >
+                <Ionicons name="add" size={22} color={sending ? colors.border : colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={pickFromLibrary}
+                disabled={sending || attachFull}
+                hitSlop={6}
+                activeOpacity={0.7}
+                style={[styles.toolBtn, { backgroundColor: colors.primarySoft }]}
+                accessibilityRole="button"
+                accessibilityLabel="Thêm ảnh từ thư viện"
+              >
+                <Ionicons name="image-outline" size={20} color={sending || attachFull ? colors.border : colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={takePhoto}
+                disabled={sending || attachFull}
+                hitSlop={6}
+                activeOpacity={0.7}
+                style={[styles.toolBtn, { backgroundColor: colors.primarySoft }]}
+                accessibilityRole="button"
+                accessibilityLabel="Chụp ảnh gửi AI"
+              >
+                <Ionicons name="camera-outline" size={21} color={sending || attachFull ? colors.border : colors.primary} />
+              </TouchableOpacity>
+
+              {/* chế độ đang bật: nằm gọn cùng hàng, chạm để tắt */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                style={{ flex: 1 }}
+                contentContainerStyle={styles.modeRow}
+              >
+                {prefs.webSearch && (
+                  <ModeChip icon="globe-outline" label="Web" colors={colors} onClear={() => updatePrefs({ webSearch: false })} />
+                )}
+                {prefs.thinking && (
+                  <ModeChip icon="bulb-outline" label="Suy nghĩ sâu" colors={colors} onClear={() => updatePrefs({ thinking: false })} />
+                )}
+                {prefs.model !== "fast" && (
+                  <ModeChip
+                    icon={CHAT_MODELS.find((m) => m.key === prefs.model)?.icon || "options-outline"}
+                    label={CHAT_MODELS.find((m) => m.key === prefs.model)?.label || ""}
+                    colors={colors}
+                    onClear={() => updatePrefs({ model: "fast" })}
+                  />
+                )}
+              </ScrollView>
+
+              <TouchableOpacity
+                onPress={() => send()}
+                disabled={!canSend}
+                activeOpacity={0.8}
+                style={[styles.sendBtn, { backgroundColor: canSend ? colors.primary : colors.border }]}
+                accessibilityRole="button"
+                accessibilityLabel="Gửi"
+              >
+                {sending ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="arrow-up" size={20} color="#ffffff" />}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Animated.View>
+
+        <ChatPlusSheet
+          visible={plusOpen}
+          prefs={prefs}
+          onChangePrefs={updatePrefs}
+          attachFull={pending.length >= MAX_FILES}
+          onClose={() => setPlusOpen(false)}
+          onPickFile={() => {
+            setPlusOpen(false);
+            setTimeout(pickFiles, 280); // chờ bảng trượt xuống rồi mới mở chọn tệp (iOS)
+          }}
+        />
+        <SmartCopySheet
+          visible={copyOpen}
+          text={copyMsg?.content || ""}
+          onClose={() => setCopyOpen(false)}
+          onRewrite={(p) => send(p)}
+          apiBase={apiBase}
+          token={token}
+          authFetch={authFetch}
+        />
 
         {/* Bảng phụ: Lịch sử chat / Ghi nhớ (phủ lên khung chat) */}
         {panel && (
@@ -1330,6 +1777,31 @@ const AIChatModal = memo(function AIChatModal({
           </View>
         )}
       </KeyboardAvoidingView>
+      {camOpen && (
+        <CameraOverlay
+          large
+          colors={colors}
+          title="Chụp ảnh gửi Tiểu Đậu"
+          subtitle={
+            inAppeal && appeal?.status === "open"
+              ? "Chụp rõ hơn một chút để em xem lại giúp chị nhé"
+              : "Chụp thứ chị muốn hỏi: bài tập, tài liệu, món đồ…"
+          }
+          hint="Vuốt lên / xuống để zoom"
+          frameWidth={Math.round(Math.min(340, winW * 0.84, winH * 0.44))}
+          quality={0.7}
+          skipProcessing={false}
+          onPicture={handleCamPicture}
+          onClose={handleCamClose}
+        />
+      )}
+      </Animated.View>
+      {/* vuốt từ mép trái (kiểu iPhone) để quay lại */}
+      <View
+        {...edgePan.panHandlers}
+        style={[styles.edgeStrip, { top: insets.top + 56 }]}
+        pointerEvents="box-only"
+      />
         </Animated.View>
       </Animated.View>
     </View>
@@ -1339,6 +1811,28 @@ const AIChatModal = memo(function AIChatModal({
 export default AIChatModal;
 
 const styles = StyleSheet.create({
+  composerWrap: { paddingHorizontal: 12, paddingTop: 8 },
+  composer: { borderWidth: 1, borderRadius: 26, paddingHorizontal: 10, paddingTop: 8, paddingBottom: 10 },
+  composerBar: { flexDirection: "row", alignItems: "center", marginTop: 6 },
+  toolBtn: { width: 36, height: 36, borderRadius: 18, justifyContent: "center", alignItems: "center", marginRight: 10 },
+  modeRow: { alignItems: "center", paddingRight: 8 },
+  pendingScroll: { marginBottom: 8, marginTop: 2 },
+  edgeStrip: { position: "absolute", left: 0, bottom: 0, width: 18, zIndex: 30 },
+  codeHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
+  tableWrap: { borderWidth: 1, borderRadius: 12, overflow: "hidden" },
+  cell: { paddingHorizontal: 11, paddingVertical: 8, fontSize: 13, lineHeight: 18 },
+  fileBox: { borderWidth: 1, borderRadius: 16, overflow: "hidden", minWidth: 250 },
+  fileBoxTop: { flexDirection: "row", alignItems: "center", padding: 10 },
+  fileTile: { width: 42, height: 42, borderRadius: 13, justifyContent: "center", alignItems: "center", marginRight: 10 },
+  fileBoxName: { fontSize: 14, fontWeight: "800" },
+  fileDl: { flexDirection: "row", alignItems: "center", height: 34, borderRadius: 17, paddingHorizontal: 12, marginLeft: 8, minWidth: 34, justifyContent: "center" },
+  fileDlText: { color: "#fff", fontSize: 12.5, fontWeight: "800", marginLeft: 4 },
+  filePreview: { borderTopWidth: StyleSheet.hairlineWidth, padding: 12 },
+  appealBtn: { flexDirection: "row", alignItems: "center", alignSelf: "flex-start", marginTop: 8, borderRadius: 18, paddingVertical: 10, paddingHorizontal: 16 },
+  appealBtnText: { color: "#ffffff", fontSize: 14, fontWeight: "800", marginLeft: 7 },
+  nextWrap: { marginTop: 8, gap: 8, alignItems: "flex-start" },
+  nextChip: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderRadius: 16, paddingVertical: 8, paddingHorizontal: 12, maxWidth: "100%" },
+  nextText: { fontSize: 13.5, fontWeight: "600", marginLeft: 6, flexShrink: 1 },
   host: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, zIndex: 990, elevation: 28 },
   fill: { flex: 1 },
   container: { flex: 1 },
@@ -1416,7 +1910,6 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   chipText: { fontSize: 14, fontWeight: "600", textAlign: "center" },
-  pendingBar: { paddingHorizontal: 12, paddingTop: 10 },
   pendingItem: { marginRight: 10, paddingTop: 6, paddingRight: 6 },
   pendingImg: { width: 64, height: 64, borderRadius: 14, borderWidth: 1 },
   pendingFile: { width: 120, height: 64, borderRadius: 14, borderWidth: 1, paddingHorizontal: 10, justifyContent: "center" },
@@ -1475,15 +1968,13 @@ const styles = StyleSheet.create({
   },
   attachBtn: { width: 40, height: 42, justifyContent: "center", alignItems: "center" },
   input: {
-    flex: 1,
-    maxHeight: 120,
-    minHeight: 42,
-    borderRadius: 21,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === "ios" ? 11 : 8,
-    paddingBottom: Platform.OS === "ios" ? 11 : 8,
-    fontSize: 15,
+    maxHeight: 140,
+    minHeight: 40,
+    paddingHorizontal: 8,
+    paddingTop: Platform.OS === "ios" ? 8 : 6,
+    paddingBottom: 6,
+    fontSize: 16,
+    lineHeight: 22,
   },
   msgCol: { maxWidth: "82%", flexShrink: 1 },
   msgImg: { width: 168, height: 168, borderRadius: 12, marginBottom: 6, backgroundColor: "rgba(0,0,0,0.08)" },
@@ -1491,7 +1982,6 @@ const styles = StyleSheet.create({
   actionBtn: { flexDirection: "row", alignItems: "center", paddingVertical: 3, marginRight: 14 },
   actionText: { fontSize: 12, fontWeight: "600", marginLeft: 4 },
   pendingThumb: { width: 26, height: 26, borderRadius: 7, marginRight: 8 },
-  modeBar: { paddingHorizontal: 12, paddingTop: 8 },
   modeChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -1503,9 +1993,9 @@ const styles = StyleSheet.create({
   },
   modeChipText: { fontSize: 12.5, fontWeight: "700", marginHorizontal: 5 },
   sendBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     marginLeft: 8,
     justifyContent: "center",
     alignItems: "center",

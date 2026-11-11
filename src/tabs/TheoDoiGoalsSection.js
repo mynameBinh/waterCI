@@ -12,46 +12,47 @@ import {
   TextInput,
   View,
 } from "react-native";
+import {
+  API_BASE,
+  EmptyState,
+  PhotoGrid,
+  SectionHeader,
+  SummaryCard,
+  isToday,
+  thumbUrl,
+} from "./TheoDoiShared";
 
-const API_BASE = "https://binhhn21-water-check-in-backend.hf.space";
 const TARGET_USERNAME = "binhhn21"; // tài khoản được đặt mục tiêu
 const REFRESH_INTERVAL_MS = 10000;
 
-// ── Endpoint backend (CẦN có phía server, xem ghi chú trong câu trả lời) ──
-// GET   /api/embe/target-tasks?username=binhhn21
-//       -> { tasks: [{ id, title, verify_description, target_per_day, done_today,
-//                      is_active, checkins: [{ id, time, date, image_url }] }] }
-// POST  /api/embe/target-tasks            body JSON { username, title, verify_description, target_per_day }
-// PATCH /api/embe/target-tasks/{id}       body JSON { is_active: false }
-const LIST_URL = `${API_BASE}/api/embe/target-tasks?username=${encodeURIComponent(
-  TARGET_USERNAME,
-)}`;
+// ── Endpoint backend ──
+// GET    /api/embe/target-tasks?username=binhhn21
+//        -> { tasks: [{ id, title, verify_description, target_per_day, done_today, repeat,
+//                       is_active, checkins: [{ id, time, date, image_url }] }] }
+// POST   /api/embe/target-tasks        body { username, title, verify_description, target_per_day, repeat }
+// DELETE /api/embe/target-tasks/{id}   XOÁ hẳn (xem backend/TASKS_REPEAT_FIX.md). Chưa có -> app tự
+//                                      chuyển sang PATCH { is_active:false } để vẫn dùng được.
+const LIST_URL = `${API_BASE}/api/embe/target-tasks?username=${encodeURIComponent(TARGET_USERNAME)}`;
 const CREATE_URL = `${API_BASE}/api/embe/target-tasks`;
 const taskUrl = (id) => `${API_BASE}/api/embe/target-tasks/${id}`;
-
-const thumbUrl = (u) =>
-  u ? `${API_BASE}/api/thumb/${u.split("/").pop()}?w=480` : null;
 
 // Cache module-level: chuyển tab qua lại không bị nháy loading
 let cachedTasks = null;
 let hasFetchedOnce = false;
 
-const parseList = (data) =>
-  Array.isArray(data?.tasks) ? data.tasks : Array.isArray(data) ? data : [];
+const parseList = (data) => (Array.isArray(data?.tasks) ? data.tasks : Array.isArray(data) ? data : []);
 
 // Gọi từ TheoDoiTab ngay khi vào app: tải sẵn danh sách mục tiêu + ảnh thumbnail
 export async function prefetchGoals(token) {
   if (!token || hasFetchedOnce) return;
   try {
-    const res = await fetch(LIST_URL, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await fetch(LIST_URL, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return;
     const list = parseList(await res.json());
     cachedTasks = list;
     hasFetchedOnce = true;
     list.forEach((t) =>
-      (t.checkins || []).forEach((c) => {
+      (t.checkins || []).filter((c) => isToday(c.date)).forEach((c) => {
         const u = thumbUrl(c.image_url);
         if (u) Image.prefetch(u).catch(() => {});
       }),
@@ -59,13 +60,15 @@ export async function prefetchGoals(token) {
   } catch {}
 }
 
+const isDone = (t) => (t.done_today ?? 0) >= Math.max(t.target_per_day ?? 1, 1);
+
 export default function TheoDoiGoalsSection({ token, colors, active = true }) {
   const [loading, setLoading] = useState(!hasFetchedOnce);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [tasks, setTasks] = useState(cachedTasks ?? []);
   const [selectedId, setSelectedId] = useState(cachedTasks?.[0]?.id ?? null);
-  const [repeat, setRepeat] = useState("daily"); // "daily" | "today"
+  const [repeat, setRepeat] = useState("today"); // "daily" | "today" – mặc định "chỉ hôm nay" để khỏi lặp ngoài ý muốn
 
   // form tạo mục tiêu
   const [showForm, setShowForm] = useState(false);
@@ -81,24 +84,19 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
       if (!token) return;
       if (!silent) setErrorMsg(null);
       try {
-        const res = await fetch(LIST_URL, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await fetch(LIST_URL, { headers: { Authorization: `Bearer ${token}` } });
         if (res.status === 403) {
           setErrorMsg('Chỉ tài khoản "em bé" mới được đặt mục tiêu.');
           return;
         }
         if (!res.ok) throw new Error();
-        const data = await res.json();
-        const list = parseList(data);
+        const list = parseList(await res.json());
         if (JSON.stringify(list) !== JSON.stringify(cachedTasks)) {
           cachedTasks = list;
           setTasks(list);
         }
         setErrorMsg(null);
-        setSelectedId((prev) =>
-          list.some((t) => t.id === prev) ? prev : (list[0]?.id ?? null),
-        );
+        setSelectedId((prev) => (list.some((t) => t.id === prev) ? prev : (list[0]?.id ?? null)));
       } catch {
         if (!silent) setErrorMsg("Không thể tải mục tiêu. Vui lòng thử lại.");
       } finally {
@@ -130,8 +128,7 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
     const n = parseInt(target, 10);
     const desc = description.trim();
     if (!t) return Alert.alert("Thiếu tên", "Nhập tên mục tiêu nhé.");
-    if (!desc)
-      return Alert.alert("Thiếu mô tả", "Nhập thứ cần thấy trong ảnh nhé.");
+    if (!desc) return Alert.alert("Thiếu mô tả", "Nhập thứ cần thấy trong ảnh nhé.");
     if (!n || n < 1) return Alert.alert("Sai số lần", "Số lần/ngày phải ≥ 1.");
     setSubmitting(true);
     try {
@@ -148,14 +145,12 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(
-          typeof data.detail === "string" ? data.detail : "Không tạo được",
-        );
+        throw new Error(typeof data.detail === "string" ? data.detail : "Không tạo được");
       }
       setTitle("");
       setDescription("");
       setTarget("1");
-      setRepeat("daily");
+      setRepeat("today");
       setShowForm(false);
       await loadData();
       if (data?.id) setSelectedId(data.id);
@@ -166,22 +161,34 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
     }
   };
 
-  const handleDisable = (task) => {
-    Alert.alert("Tắt mục tiêu", `Tắt "${task.title}" cho ${TARGET_USERNAME}?`, [
+  // XOÁ mục tiêu (trước đây là "Tắt"): biến mất khỏi danh sách ngay, lỗi thì tải lại
+  const handleDelete = (task) => {
+    Alert.alert("Xoá mục tiêu", `Xoá "${task.title}" của ${TARGET_USERNAME}? Không hoàn tác được.`, [
       { text: "Huỷ", style: "cancel" },
       {
-        text: "Tắt",
+        text: "Xoá",
         style: "destructive",
         onPress: async () => {
+          const before = cachedTasks;
+          const after = (before || []).filter((t) => t.id !== task.id);
+          cachedTasks = after;
+          setTasks(after);
+          setSelectedId((prev) => (prev === task.id ? (after[0]?.id ?? null) : prev));
           try {
-            const res = await fetch(taskUrl(task.id), {
-              method: "PATCH",
-              headers: { ...authHeaders, "Content-Type": "application/json" },
-              body: JSON.stringify({ is_active: false }),
-            });
-            if (!res.ok) throw new Error("Không tắt được mục tiêu");
-            await loadData();
+            let res = await fetch(taskUrl(task.id), { method: "DELETE", headers: authHeaders });
+            // backend chưa có DELETE -> dùng tạm cách cũ (ẩn mục tiêu) để vẫn hoạt động
+            if ([404, 405, 501].includes(res.status)) {
+              res = await fetch(taskUrl(task.id), {
+                method: "PATCH",
+                headers: { ...authHeaders, "Content-Type": "application/json" },
+                body: JSON.stringify({ is_active: false }),
+              });
+            }
+            if (!res.ok) throw new Error("Không xoá được mục tiêu");
+            await loadData(true);
           } catch (e) {
+            cachedTasks = before;
+            setTasks(before || []);
             Alert.alert("Lỗi", e.message);
           }
         },
@@ -190,172 +197,129 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
   };
 
   const selected = tasks.find((t) => t.id === selectedId) ?? null;
-  const checkins = (selected?.checkins || []).map((c) => ({
-    id: c.id,
-    time: c.time,
-    date: c.date,
-    imageUrl: thumbUrl(c.image_url),
-  }));
+  // CHỈ hiện lượt check-in của HÔM NAY (không hiện những ngày trước)
+  const todays = (selected?.checkins || [])
+    .filter((c) => isToday(c.date))
+    .map((c) => ({ id: c.id, time: c.time, date: c.date, imageUrl: thumbUrl(c.image_url) }));
+
+  const doneTasks = tasks.filter(isDone).length;
+  const totalToday = tasks.reduce((n, t) => n + (t.done_today ?? 0), 0);
+
+  const input = [styles.input, { color: colors.text, borderColor: colors.border || "#dbeafe" }];
 
   return (
     <ScrollView
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
       contentContainerStyle={{ paddingBottom: 40 }}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          tintColor={colors.primary}
-        />
-      }
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
     >
-      {/* ── Đặt mục tiêu mới ── */}
-      <Pressable
-        onPress={() => setShowForm((v) => !v)}
-        style={[styles.addBtn, { backgroundColor: colors.primarySoft }]}
-      >
-        <Ionicons
-          name={showForm ? "close" : "add-circle"}
-          size={20}
-          color={colors.primary}
+      {/* ── Tổng quan: cùng bố cục với tab "Uống nước" ── */}
+      {!loading && !errorMsg && (
+        <SummaryCard
+          colors={colors}
+          icon="flag"
+          title="Mục tiêu hôm nay"
+          subtitle={`Giao cho ${TARGET_USERNAME}`}
+          progress={tasks.length ? doneTasks / tasks.length : 0}
+          stats={[
+            { value: `${doneTasks}/${tasks.length}`, label: "hoàn thành" },
+            { value: `${totalToday}`, label: "lượt check-in" },
+            { value: `${tasks.length - doneTasks}`, label: "còn lại" },
+          ]}
         />
-        <Text style={[styles.addBtnText, { color: colors.primaryText }]}>
-          {showForm ? "Đóng" : `Đặt mục tiêu cho ${TARGET_USERNAME}`}
-        </Text>
-      </Pressable>
+      )}
+
+      {/* ── Danh sách mục tiêu + nút giao mục tiêu ── */}
+      <SectionHeader
+        colors={colors}
+        title="Mục tiêu"
+        count={loading || errorMsg ? undefined : tasks.length}
+        right={
+          <Pressable
+            onPress={() => setShowForm((v) => !v)}
+            hitSlop={6}
+            style={[styles.addPill, { backgroundColor: colors.primarySoft }]}
+          >
+            <Ionicons name={showForm ? "close" : "add"} size={16} color={colors.primary} />
+            <Text style={[styles.addPillText, { color: colors.primaryText }]}>{showForm ? "Đóng" : "Giao mục tiêu"}</Text>
+          </Pressable>
+        }
+      />
 
       {showForm && (
         <View style={[styles.formCard, { backgroundColor: colors.card }]}>
-          <Text style={[styles.label, { color: colors.textMuted }]}>
-            Tên mục tiêu
-          </Text>
+          <Text style={[styles.label, { color: colors.textMuted }]}>Tên mục tiêu</Text>
           <TextInput
             value={title}
             onChangeText={setTitle}
             placeholder="VD: Ăn cơm, học bài..."
             placeholderTextColor={colors.textMuted}
-            style={[
-              styles.input,
-              { color: colors.text, borderColor: colors.border || "#dbeafe" },
-            ]}
+            style={input}
           />
-          <Text style={[styles.label, { color: colors.textMuted }]}>
-            Mô tả mục tiêu để AI kiểm tra camera
-          </Text>
+          <Text style={[styles.label, { color: colors.textMuted }]}>Mô tả mục tiêu để AI kiểm tra camera</Text>
           <TextInput
             value={description}
             onChangeText={setDescription}
             placeholder="VD: Chén cơm, sách vở..."
             placeholderTextColor={colors.textMuted}
             multiline
-            style={[
-              styles.input,
-              styles.inputMulti,
-              { color: colors.text, borderColor: colors.border || "#dbeafe" },
-            ]}
+            style={[...input, styles.inputMulti]}
           />
-          <Text style={[styles.label, { color: colors.textMuted }]}>
-            Số lần mỗi ngày
-          </Text>
+          <Text style={[styles.label, { color: colors.textMuted }]}>Số lần mỗi ngày</Text>
           <TextInput
             value={target}
             onChangeText={(v) => setTarget(v.replace(/[^0-9]/g, ""))}
             keyboardType="number-pad"
-            style={[
-              styles.input,
-              { color: colors.text, borderColor: colors.border || "#dbeafe" },
-            ]}
+            style={input}
           />
-          <Text style={[styles.label, { color: colors.textMuted }]}>
-            Kiểu mục tiêu
-          </Text>
+          <Text style={[styles.label, { color: colors.textMuted }]}>Kiểu mục tiêu</Text>
           <View style={[styles.repeatRow, { backgroundColor: colors.background }]}>
             {[
-              { key: "daily", label: "Hằng ngày", icon: "repeat" },
               { key: "today", label: "Chỉ hôm nay", icon: "today-outline" },
+              { key: "daily", label: "Hằng ngày", icon: "repeat" },
             ].map((o) => {
               const on = repeat === o.key;
               return (
                 <Pressable
                   key={o.key}
                   onPress={() => setRepeat(o.key)}
-                  style={[
-                    styles.repeatItem,
-                    on && { backgroundColor: colors.primary },
-                  ]}
+                  style={[styles.repeatItem, on && { backgroundColor: colors.primary }]}
                 >
-                  <Ionicons
-                    name={o.icon}
-                    size={14}
-                    color={on ? "#fff" : colors.textMuted}
-                  />
-                  <Text
-                    style={[
-                      styles.repeatText,
-                      { color: on ? "#fff" : colors.textMuted },
-                    ]}
-                  >
-                    {o.label}
-                  </Text>
+                  <Ionicons name={o.icon} size={14} color={on ? "#fff" : colors.textMuted} />
+                  <Text style={[styles.repeatText, { color: on ? "#fff" : colors.textMuted }]}>{o.label}</Text>
                 </Pressable>
               );
             })}
           </View>
           <Text style={[styles.hint, { color: colors.textMuted }]}>
             {repeat === "daily"
-              ? "Lặp lại mỗi ngày cho tới khi tắt."
+              ? "Lặp lại mỗi ngày cho tới khi xoá."
               : "Chỉ áp dụng trong hôm nay, qua nửa đêm tự hết hạn."}
           </Text>
           <Pressable
             onPress={handleCreate}
             disabled={submitting}
-            style={[
-              styles.submitBtn,
-              { backgroundColor: colors.primary, opacity: submitting ? 0.6 : 1 },
-            ]}
+            style={[styles.submitBtn, { backgroundColor: colors.primary, opacity: submitting ? 0.6 : 1 }]}
           >
-            {submitting ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.submitText}>Giao mục tiêu</Text>
-            )}
+            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.submitText}>Giao mục tiêu</Text>}
           </Pressable>
         </View>
       )}
 
-      {/* ── Danh sách mục tiêu + ảnh ── */}
       {loading ? (
-        <ActivityIndicator
-          size="large"
-          color={colors.primary}
-          style={{ marginTop: 30 }}
-        />
+        <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 30 }} />
       ) : errorMsg ? (
-        <View style={styles.emptyWrap}>
-          <Ionicons
-            name="alert-circle-outline"
-            size={40}
-            color={colors.textMuted}
-          />
-          <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-            {errorMsg}
-          </Text>
-        </View>
+        <EmptyState colors={colors} icon="alert-circle-outline" text={errorMsg} />
       ) : tasks.length === 0 ? (
-        <View style={styles.emptyWrap}>
-          <Ionicons name="flag-outline" size={40} color={colors.textMuted} />
-          <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-            Chưa có mục tiêu nào cho {TARGET_USERNAME}
-          </Text>
-        </View>
+        <EmptyState colors={colors} icon="flag-outline" text={`Chưa có mục tiêu nào cho ${TARGET_USERNAME}`} />
       ) : (
         <>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.chipsContent}
-            style={{ marginHorizontal: -4 }}
+            style={{ marginHorizontal: -4, marginBottom: 16 }}
           >
             {tasks.map((t) => {
               const tg = Math.max(t.target_per_day ?? 1, 1);
@@ -365,33 +329,13 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
                 <Pressable
                   key={t.id}
                   onPress={() => setSelectedId(t.id)}
-                  style={[
-                    styles.chip,
-                    {
-                      backgroundColor: sel ? colors.primary : colors.card,
-                    },
-                  ]}
+                  style={[styles.chip, { backgroundColor: sel ? colors.primary : colors.card }]}
                 >
-                  <Ionicons
-                    name={d >= tg ? "checkmark-circle" : "flag"}
-                    size={15}
-                    color={sel ? "#fff" : colors.primary}
-                  />
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      styles.chipTitle,
-                      { color: sel ? "#fff" : colors.text },
-                    ]}
-                  >
+                  <Ionicons name={d >= tg ? "checkmark-circle" : "flag"} size={15} color={sel ? "#fff" : colors.primary} />
+                  <Text numberOfLines={1} style={[styles.chipTitle, { color: sel ? "#fff" : colors.text }]}>
                     {t.title}
                   </Text>
-                  <Text
-                    style={[
-                      styles.chipCount,
-                      { color: sel ? "rgba(255,255,255,0.8)" : colors.textMuted },
-                    ]}
-                  >
+                  <Text style={[styles.chipCount, { color: sel ? "rgba(255,255,255,0.8)" : colors.textMuted }]}>
                     {d}/{tg}
                   </Text>
                 </Pressable>
@@ -401,93 +345,45 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
 
           {selected && (
             <>
-              <View style={styles.selectedHeader}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.sectionTitle, { color: colors.text }]}>
-                    Ảnh check-in: {selected.title}
-                    {"  "}
-                    <Text style={{ color: colors.primaryText, fontSize: 11 }}>
-                      · {selected.repeat === "today" ? "Chỉ hôm nay" : "Hằng ngày"}
-                    </Text>
+              <SectionHeader
+                colors={colors}
+                title={`Hôm nay · ${selected.title}`}
+                count={`${todays.length}/${Math.max(selected.target_per_day ?? 1, 1)}`}
+                right={
+                  <Pressable
+                    onPress={() => handleDelete(selected)}
+                    hitSlop={8}
+                    style={styles.delBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel="Xoá mục tiêu"
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#ef4444" />
+                    <Text style={styles.delText}>Xoá</Text>
+                  </Pressable>
+                }
+              />
+              <View style={styles.metaRow}>
+                <View style={[styles.repeatTag, { backgroundColor: colors.primarySoft }]}>
+                  <Ionicons
+                    name={selected.repeat === "today" ? "today-outline" : "repeat"}
+                    size={12}
+                    color={colors.primaryText}
+                  />
+                  <Text style={[styles.repeatTagText, { color: colors.primaryText }]}>
+                    {selected.repeat === "today" ? "Chỉ hôm nay" : "Hằng ngày"}
                   </Text>
-                  {!!selected.verify_description && (
-                    <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-                      {selected.verify_description}
-                    </Text>
-                  )}
                 </View>
-                <Pressable
-                  onPress={() => handleDisable(selected)}
-                  hitSlop={8}
-                  style={styles.offBtn}
-                >
-                  <Ionicons name="power" size={14} color="#ef4444" />
-                  <Text style={styles.offText}>Tắt</Text>
-                </Pressable>
+                {!!selected.verify_description && (
+                  <Text numberOfLines={2} style={[styles.desc, { color: colors.textMuted }]}>
+                    {selected.verify_description}
+                  </Text>
+                )}
               </View>
 
-              {checkins.length === 0 ? (
-                <View style={styles.emptyWrap}>
-                  <Ionicons
-                    name="camera-outline"
-                    size={40}
-                    color={colors.textMuted}
-                  />
-                  <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-                    Chưa có ảnh check-in nào cho mục tiêu này
-                  </Text>
-                </View>
+              {todays.length === 0 ? (
+                <EmptyState colors={colors} icon="camera-outline" text="Hôm nay chưa có ảnh check-in nào cho mục tiêu này" />
               ) : (
-                <View style={styles.grid}>
-                  {checkins.map((item) => (
-                    <View
-                      key={String(item.id)}
-                      style={[
-                        styles.photoCard,
-                        {
-                          backgroundColor: colors.card,
-                          borderColor: colors.border || "#dbeafe",
-                        },
-                      ]}
-                    >
-                      <View style={styles.photoHeader}>
-                        <Ionicons
-                          name="time-outline"
-                          size={13}
-                          color={colors.textMuted}
-                        />
-                        <Text
-                          style={[styles.photoTime, { color: colors.textMuted }]}
-                          numberOfLines={1}
-                        >
-                          {item.time}
-                        </Text>
-                      </View>
-                      {!!item.date && (
-                        <Text
-                          style={[styles.photoDate, { color: colors.textMuted }]}
-                        >
-                          {item.date}
-                        </Text>
-                      )}
-                      {item.imageUrl ? (
-                        <Image
-                          source={{ uri: item.imageUrl }}
-                          style={styles.photo}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View style={[styles.photo, styles.photoPlaceholder]}>
-                          <Ionicons
-                            name="image-outline"
-                            size={28}
-                            color={colors.primary}
-                          />
-                        </View>
-                      )}
-                    </View>
-                  ))}
-                </View>
+                <PhotoGrid colors={colors} items={todays} />
               )}
             </>
           )}
@@ -498,16 +394,16 @@ export default function TheoDoiGoalsSection({ token, colors, active = true }) {
 }
 
 const styles = StyleSheet.create({
-  addBtn: {
+  addPill: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
+    gap: 4,
     borderRadius: 16,
-    paddingVertical: 12,
-    marginBottom: 14,
+    paddingVertical: 7,
+    paddingLeft: 10,
+    paddingRight: 12,
   },
-  addBtnText: { fontSize: 14, fontWeight: "800" },
+  addPillText: { fontSize: 12.5, fontWeight: "800" },
 
   formCard: {
     borderRadius: 18,
@@ -520,13 +416,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   label: { fontSize: 12, fontWeight: "700", marginBottom: 6, marginTop: 8 },
-  input: {
-    borderWidth: 1.5,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 14,
-  },
+  input: { borderWidth: 1.5, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
   inputMulti: { minHeight: 64, textAlignVertical: "top" },
   repeatRow: { flexDirection: "row", borderRadius: 12, padding: 3 },
   repeatItem: {
@@ -540,12 +430,7 @@ const styles = StyleSheet.create({
   },
   repeatText: { fontSize: 13, fontWeight: "800" },
   hint: { fontSize: 11.5, marginTop: 6, fontWeight: "500" },
-  submitBtn: {
-    marginTop: 16,
-    borderRadius: 14,
-    paddingVertical: 13,
-    alignItems: "center",
-  },
+  submitBtn: { marginTop: 16, borderRadius: 14, paddingVertical: 13, alignItems: "center" },
   submitText: { color: "#fff", fontSize: 15, fontWeight: "800" },
 
   chipsContent: { paddingHorizontal: 4, paddingVertical: 6, gap: 10 },
@@ -563,22 +448,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
-  chipTitle: {
-    flexShrink: 1,
-    fontSize: 13.5,
-    fontWeight: "700",
-    marginLeft: 6,
-  },
+  chipTitle: { flexShrink: 1, fontSize: 13.5, fontWeight: "700", marginLeft: 6 },
   chipCount: { fontSize: 12, fontWeight: "700", marginLeft: 8 },
 
-  selectedHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 14,
-    marginBottom: 10,
-  },
-  sectionTitle: { fontSize: 14, fontWeight: "800" },
-  offBtn: {
+  delBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
@@ -587,42 +460,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "rgba(239,68,68,0.1)",
   },
-  offText: { color: "#ef4444", fontSize: 12, fontWeight: "800" },
+  delText: { color: "#ef4444", fontSize: 12, fontWeight: "800" },
 
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-  },
-  photoCard: {
-    width: "48.5%",
-    borderRadius: 16,
-    borderWidth: 1.5,
-    padding: 10,
-    marginBottom: 12,
-  },
-  photoHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginBottom: 4,
-  },
-  photoTime: { fontSize: 12, fontWeight: "700", flexShrink: 1 },
-  photoDate: { fontSize: 10, fontWeight: "600", marginBottom: 8 },
-  photo: {
-    width: "100%",
-    aspectRatio: 1,
-    borderRadius: 12,
-    backgroundColor: "#0f172a",
-  },
-  photoPlaceholder: { justifyContent: "center", alignItems: "center" },
-
-  emptyWrap: { alignItems: "center", marginTop: 40 },
-  emptyText: {
-    marginTop: 10,
-    fontSize: 13,
-    fontWeight: "600",
-    textAlign: "center",
-    paddingHorizontal: 20,
-  },
+  metaRow: { flexDirection: "row", alignItems: "center", marginTop: -4, marginBottom: 14, gap: 10 },
+  repeatTag: { flexDirection: "row", alignItems: "center", gap: 4, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4 },
+  repeatTagText: { fontSize: 11, fontWeight: "800" },
+  desc: { flex: 1, fontSize: 12, lineHeight: 16 },
 });

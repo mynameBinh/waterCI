@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Haptics from "expo-haptics";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
@@ -69,6 +70,8 @@ const FloatingAIButton = memo(function FloatingAIButton({
   bubble = null, // { id, text, meta? } -> bong bóng tin nhắn từ AI
   onBubbleClose,
   dockTarget = null, // { x, y, size } | null -> bay tới huy hiệu của ScanningOverlay
+  hidden = false, // true -> nút thu nhỏ + mờ đi (khi khung chat đang mở), false -> bật lại có hiệu ứng nảy
+  badge = false, // true -> chấm đỏ ở góc nút: còn check-in bị từ chối đang chờ giải thích (bong bóng đã tắt vẫn bấm vào nút được)
 }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -94,6 +97,13 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const y = useRef(new Animated.Value(Math.max(bounds.minY, bounds.maxY - 80))).current;
   const scale = useRef(new Animated.Value(1)).current;
   const opacity = useRef(new Animated.Value(1)).current;
+  const hide = useRef(new Animated.Value(hidden ? 1 : 0)).current; // 0 = hiện, 1 = ẩn
+  const liftedRef = useRef(false);
+
+  useEffect(() => {
+    if (hidden) Animated.timing(hide, { toValue: 1, duration: 140, useNativeDriver: false }).start();
+    else Animated.spring(hide, { toValue: 0, useNativeDriver: false, friction: 5, tension: 140 }).start();
+  }, [hidden, hide]);
 
   const posRef = useRef({ x: bounds.maxX, y: Math.max(bounds.minY, bounds.maxY - 80) });
   const startRef = useRef({ x: 0, y: 0 });
@@ -309,18 +319,27 @@ const FloatingAIButton = memo(function FloatingAIButton({
         y.stopAnimation();
         startRef.current = { ...posRef.current };
         wake();
-        Animated.spring(scale, { toValue: 1.12, useNativeDriver: false, friction: 6 }).start();
+        liftedRef.current = false;
+        Animated.spring(scale, { toValue: 0.88, useNativeDriver: false, friction: 7, tension: 200 }).start(); // lún xuống khi chạm
       },
       onPanResponderMove: (_, g) => {
         const b = boundsRef.current;
+        if (!liftedRef.current && Math.hypot(g.dx, g.dy) > TAP_SLOP) {
+          liftedRef.current = true;
+          Animated.spring(scale, { toValue: 1.1, useNativeDriver: false, friction: 6 }).start(); // nhấc lên khi kéo
+        }
         x.setValue(clamp(startRef.current.x + g.dx, b.minX, b.maxX));
         y.setValue(clamp(startRef.current.y + g.dy, b.minY, b.maxY));
       },
       onPanResponderRelease: (_, g) => {
-        Animated.spring(scale, { toValue: 1, useNativeDriver: false, friction: 6 }).start();
+        Animated.spring(scale, { toValue: 1, useNativeDriver: false, friction: 4, tension: 160 }).start();
         const isTap = Math.hypot(g.dx, g.dy) < TAP_SLOP;
+        const origin = { x: posRef.current.x + SIZE / 2, y: posRef.current.y + SIZE / 2 }; // lấy trước khi hít vào mép
         snap();
-        if (isTap) onPressRef.current?.();
+        if (isTap) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+          onPressRef.current?.(origin);
+        }
       },
       onPanResponderTerminate: () => {
         Animated.spring(scale, { toValue: 1, useNativeDriver: false, friction: 6 }).start();
@@ -333,7 +352,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
 
   return (
     <>
-    {shown && (
+    {shown && !hidden && (
       <Animated.View
         pointerEvents="box-none"
         style={[
@@ -358,7 +377,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
             activeOpacity={0.9}
             onPress={() => {
               onCloseRef.current?.();
-              onPressRef.current?.();
+              onPressRef.current?.({ x: posRef.current.x + SIZE / 2, y: posRef.current.y + SIZE / 2 });
             }}
             accessibilityRole="button"
             accessibilityLiveRegion="polite"
@@ -397,18 +416,26 @@ const FloatingAIButton = memo(function FloatingAIButton({
     )}
     <Animated.View
       {...pan.panHandlers}
-      pointerEvents={docked ? "none" : "auto"}
+      pointerEvents={docked || hidden ? "none" : "auto"}
       accessible
       accessibilityRole="button"
       accessibilityLabel="Trò chuyện với AI"
-      onAccessibilityTap={() => onPressRef.current?.()}
+      onAccessibilityTap={() => onPressRef.current?.({ x: posRef.current.x + SIZE / 2, y: posRef.current.y + SIZE / 2 })}
       style={[
         styles.fab,
         docked && styles.fabDocked, // nổi trên cả ScanningOverlay (zIndex 1000)
-        { opacity, transform: [{ translateX: x }, { translateY: y }, { scale }] },
+        {
+          opacity: Animated.multiply(opacity, hide.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })),
+          transform: [
+            { translateX: x },
+            { translateY: y },
+            { scale: Animated.multiply(scale, hide.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] })) },
+          ],
+        },
       ]}
     >
       <Image source={avatar} style={styles.img} />
+      {badge && <View pointerEvents="none" style={[styles.badge, { borderColor: colors.card }]} />}
     </Animated.View>
     </>
   );
@@ -434,6 +461,7 @@ const styles = StyleSheet.create({
   },
   fabDocked: { zIndex: 1002, elevation: 40 },
   img: { width: "100%", height: "100%", borderRadius: SIZE / 2 },
+  badge: { position: "absolute", top: 1, right: 1, width: 14, height: 14, borderRadius: 7, backgroundColor: "#ef4444", borderWidth: 2 },
   bubbleHost: {
     position: "absolute",
     left: 0,

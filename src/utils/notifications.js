@@ -1,6 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Asset } from "expo-asset";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { ACCENTS } from "../context/ThemeContext";
 
 const T = Notifications.SchedulableTriggerInputTypes;
 const IS_ANDROID = Platform.OS === "android";
@@ -15,17 +17,184 @@ const TASK_HORIZON_DAYS = 3;
 const MAX_TASK_NOTIFS = 40;
 
 // Tên âm thanh người dùng chọn -> file trong app.
-// iOS chỉ phát được file đã được đóng gói vào app (plugin expo-notifications
-// "sounds"); file không tồn tại thì iOS tự phát âm mặc định. ĐỔI tên file ở đây
-// cho khớp với file thật bạn đã thêm.
+// iOS chỉ phát được file đã được đóng gói vào app: MỖI file ở đây phải có trong mảng "sounds" của plugin
+// expo-notifications (app.json) với đúng tên + đuôi, rồi build lại app. File chưa có -> tự dùng âm mặc định.
 const SOUND_FILES = {
   "Tiếng nước chảy": "pouring_water.wav",
   "Ting ting": "ting_ting.wav",
   "Tiếng chim hót": "bird.wav",
   "Chuông ngân (Mặc định)": "pouring_water.wav", // giữ đúng hành vi cũ
 };
+// Android: âm thanh được gắn ở NOTIFICATION CHANNEL ("water-reminder", tạo trong DashboardScreen với
+// sound: "pouring_water.mp3"). File nằm trong res/raw do plugin expo-notifications ("sounds") chép vào,
+// nên ở đây chỉ dùng TÊN FILE trùng channel — KHÔNG dùng đường dẫn tương đối kiểu "../assets/...".
+const ANDROID_SOUND = "pouring_water.mp3";
+
+// iOS: file .wav chỉ phát được nếu BẢN APP ĐANG CHẠY đã đóng gói nó (xem hướng dẫn build lại). Bản chưa có thì
+// native chỉ GHI LOG "Custom sound ... not found in native app" (không ném lỗi) và thông báo mất tiếng.
+// Để false = dùng âm mặc định cho tới khi bạn build lại app có chứa file; build xong thì đổi thành true.
+const IOS_CUSTOM_SOUNDS_READY = false;
 const soundFor = (name) =>
-  IS_ANDROID ? "pouring_water.mp3" : (SOUND_FILES[name] ?? "default");
+  IS_ANDROID
+    ? ANDROID_SOUND
+    : IOS_CUSTOM_SOUNDS_READY
+      ? (SOUND_FILES[name] ?? "default")
+      : "default";
+
+// ─── Giọng "Tiểu Đậu" ────────────────────────────────────────────────────────
+// Tiểu Đậu xưng "em", gọi người dùng là "anh" / "chị". Cách gọi lấy từ server (điều người dùng đã nhờ
+// AI ghi nhớ) và được lưu lại để dùng được cả khi offline. {u} = anh|chị, {U} = Anh|Chị.
+const ADDRESS_KEY = "notif_user_address";
+const DEFAULT_ADDRESS = "chị"; // khớp mặc định của server (NOTIF_DEFAULT_ADDRESS)
+let userAddress = null;
+let accentKey = "ocean";
+
+// Gọi từ DashboardScreen mỗi lần render (chỉ gán biến, rất nhẹ). Trả về true nếu cách xưng hô đổi.
+export function setNotificationVoice({ accent, address } = {}) {
+  if (accent && ACCENTS[accent]) accentKey = accent;
+  if (address === "anh" || address === "chị") {
+    if (address !== userAddress) {
+      userAddress = address;
+      AsyncStorage.setItem(ADDRESS_KEY, address).catch(() => {});
+      return true;
+    }
+  }
+  return false;
+}
+
+async function getAddress() {
+  if (userAddress) return userAddress;
+  try {
+    const v = await AsyncStorage.getItem(ADDRESS_KEY);
+    if (v === "anh" || v === "chị") userAddress = v;
+  } catch {
+    /* ignore */
+  }
+  return userAddress || DEFAULT_ADDRESS;
+}
+
+const WATER_TITLES = [
+  "Tiểu Đậu nhắc {u} nè 💧",
+  "Uống nước thôi {u} ơi! 🥤",
+  "Ting ting! Giờ uống nước rồi 💦",
+  "{U} ơi, em khát giùm {u} nè 🐳",
+  "Nước đang gọi {u} đó nha 🌊",
+];
+const WATER_BODIES = [
+  "{t} rồi nè! {U} nhấp một ngụm cho em vui nha 🥺",
+  "Em canh giờ giùm {u} nè: uống nước rồi chụp check-in giữ chuỗi nha! 🔥",
+  "Cơ thể {u} đang réo gọi nước đó, em nghe thấy luôn á 💧",
+  "Một ly nước nhỏ xíu thôi, {u} làm được mà! Em cổ vũ nè 📣",
+  "Chuỗi streak đang chờ {u} đó, uống nước rồi check-in liền nha ✨",
+  "Em nhắc nhẹ thôi nha: {t} rồi, {u} uống nước chưa ạ? 🐥",
+  "Da đẹp dáng xinh là nhờ uống nước, {u} ơi! Em chờ ảnh check-in nè 📸",
+  "Ly nước này ngon lắm luôn, {u} thử đi nha! 🥤",
+  "Tiểu Đậu đến giao lời nhắc: uống nước thôi nào {u} 🌈",
+  "Đừng để em đợi lâu nha, {u} uống nước rồi khoe em xem nè 😚",
+];
+
+const TASK_TITLES = [
+  "Nhắc mục tiêu hôm nay 🎯",
+  "Tiểu Đậu nhắc {u} nè 🎯",
+  "{U} ơi, mục tiêu đang chờ nè 💪",
+  "Cố lên {u} ơi! 🌟",
+];
+const TASK_TODAY_ONE = [
+  "Mục tiêu “{n}” còn chờ {u} nè, check-in liền cho em vui nha! 🎯",
+  "Em thấy “{n}” chưa xong đó, {u} làm xíu là xong thôi à! 💪",
+  "“{n}” đang đợi {u} kìa, Tiểu Đậu cổ vũ hết mình nè! 📣",
+  "Sắp xong rồi, còn mỗi “{n}” thôi {u} ơi! Em tin {u} làm được ✨",
+];
+const TASK_TODAY_MANY = [
+  "Còn {c} mục tiêu chưa xong nè {u} ơi: {n} 🎯",
+  "Em đếm được {c} mục tiêu đang chờ {u}: {n}. Cố lên nha! 💪",
+  "{U} ơi, còn {c} việc nho nhỏ: {n}. Xong hết em khen liền nha 💖",
+];
+const TASK_NEXT_ONE = [
+  "Hôm nay {u} có mục tiêu “{n}” nè, em chờ ảnh check-in nha! 🌤️",
+  "Mục tiêu hôm nay của {u}: “{n}”. Em cổ vũ nè! 💪",
+];
+const TASK_NEXT_MANY = [
+  "Hôm nay {u} có {c} mục tiêu: {n}. Em tin {u} làm được hết! ✨",
+  "Có {c} mục tiêu đang đợi {u} nè: {n}. Mình cùng cố lên nha! 🌟",
+];
+const NEW_TASK_TITLE_ONE = ["Có mục tiêu mới nè {u} ơi! 🎯", "Tiểu Đậu báo tin vui nè! 🎉"];
+const NEW_TASK_TITLE_MANY = ["Có {c} mục tiêu mới nè {u} ơi! 🎯", "Tiểu Đậu báo tin vui: có {c} mục tiêu mới! 🎉"];
+const NEW_TASK_BODY_ONE = [
+  "“{n}” — vào check-in liền nha, em chờ nè! 💨",
+  "Mục tiêu mới “{n}” vừa tới, {u} xem thử nha! 👀",
+];
+const NEW_TASK_BODY_MANY = ["{n} — {u} vào xem liền nha, em chờ nè! 💨"];
+const TEST_BODIES = [
+  "Tiểu Đậu thử loa nè! Nếu {u} nghe được âm thanh này là mọi thứ ổn rồi nha 💖",
+  "Alo alo, em nghe rõ không {u} ơi? Có tiếng là ổn áp rồi đó! 🎶",
+];
+
+const pickOne = (pool) => pool[Math.floor(Math.random() * pool.length)];
+
+// Lấy lần lượt từ một bản xáo trộn của pool -> các thông báo cùng lượt đặt lịch KHÔNG trùng nhau
+// (chỉ lặp lại khi pool hết).
+function makeDeck(pool) {
+  let deck = [];
+  return () => {
+    if (!deck.length) {
+      deck = [...pool];
+      for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+      }
+    }
+    return deck.pop();
+  };
+}
+
+// Điền {u} {U} và các biến khác ({t} giờ, {n} tên mục tiêu, {c} số lượng)
+const fill = (tpl, address, vars = {}) => {
+  const U = address.charAt(0).toUpperCase() + address.slice(1);
+  return tpl
+    .replace(/\{U\}/g, U)
+    .replace(/\{u\}/g, address)
+    .replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
+};
+
+// ─── Hình + màu thông báo theo theme (accent) ───────────────────────────────
+// iOS: đính ảnh avatar AI đúng màu theme làm thumbnail (attachments — chỉ iOS hỗ trợ theo TỪNG thông báo).
+// Android: expo-notifications không cho đổi ảnh lớn theo từng thông báo (ảnh nhỏ/lớn do plugin gắn lúc build),
+// nên đổi MÀU nhấn của thông báo theo màu theme.
+const AVATARS = {
+  ocean: require("../../assets/ai-avata/ai-avata-xanhduong.png"),
+  pink: require("../../assets/ai-avata/ai-avata-hong.png"),
+  yellow: require("../../assets/ai-avata/ai-avata-vang.png"),
+  green: require("../../assets/ai-avata/ai-avata-xanhla.png"),
+  purple: require("../../assets/ai-avata/ai-avata-tim.png"),
+  orange: require("../../assets/ai-avata/ai-avata-cam.png"),
+};
+const avatarUriCache = {};
+function avatarUri(key) {
+  if (!avatarUriCache[key]) {
+    avatarUriCache[key] = Asset.fromModule(AVATARS[key])
+      .downloadAsync()
+      .then((a) => a.localUri || a.uri || null)
+      .catch(() => null);
+    avatarUriCache[key].then((u) => {
+      if (!u) delete avatarUriCache[key]; // lỗi -> lần sau thử lại
+    });
+  }
+  return avatarUriCache[key];
+}
+
+async function visualExtras() {
+  const key = AVATARS[accentKey] ? accentKey : "ocean";
+  if (IS_ANDROID) return { color: ACCENTS[key]?.primary };
+  const uri = await avatarUri(key);
+  return uri
+    ? {
+        attachments: [
+          { identifier: "tieu-dau-avatar", url: uri, typeHint: "public.png", hideThumbnail: false },
+        ],
+      }
+    : {};
+}
 
 // ─── Tiện ích ───────────────────────────────────────────────────────────────
 const pad = (n) => String(n).padStart(2, "0");
@@ -57,6 +226,26 @@ const androidExtras = IS_ANDROID
       channelId: "water-reminder",
     }
   : {};
+
+// Dự phòng: nếu việc đặt lịch NÉM lỗi liên quan âm thanh thì thử lại với âm mặc định để thông báo vẫn tới
+// (trước đây lỗi bị nuốt và không có thông báo nào được đặt). Lưu ý: trên iOS lỗi "sound not found" thường chỉ
+// được native ghi log chứ không ném lỗi, nên đã có cờ IOS_CUSTOM_SOUNDS_READY ở trên.
+async function scheduleSafe(request) {
+  try {
+    return await Notifications.scheduleNotificationAsync(request);
+  } catch (e) {
+    const msg = String(e?.message || e);
+    const snd = request?.content?.sound;
+    if (snd && snd !== "default" && /sound/i.test(msg)) {
+      console.warn(`[notifications] Chưa có âm "${snd}" trong app, dùng âm mặc định. ${msg}`);
+      return Notifications.scheduleNotificationAsync({
+        ...request,
+        content: { ...request.content, sound: "default" },
+      });
+    }
+    throw e;
+  }
+}
 
 async function cancelWhere(predicate) {
   const all = await Notifications.getAllScheduledNotificationsAsync();
@@ -95,16 +284,24 @@ export function syncWaterReminders(times, enabled, soundName) {
       });
       if (!enabled || !times?.length) return;
 
+      const address = await getAddress();
+      const extras = await visualExtras();
+      // Câu chữ được chọn NGẪU NHIÊN mỗi lần đặt lịch (mở app / đổi giờ / đổi theme); các giờ khác nhau
+      // trong cùng lượt không trùng câu. Vì nhắc lặp mỗi ngày nên câu giữ nguyên tới lần đặt lịch kế tiếp.
+      const nextTitle = makeDeck(WATER_TITLES);
+      const nextBody = makeDeck(WATER_BODIES);
+
       for (const timeStr of times) {
         const [hour, minute] = timeStr.split(":").map(Number);
-        await Notifications.scheduleNotificationAsync({
+        await scheduleSafe({
           identifier: `water-${timeStr}`,
           content: {
-            title: "Giờ uống nước đến rồi !!! 💧",
-            body: `${timeStr} Đã điểm, vào check-in uống nước để duy trì chuỗi nào!`,
+            title: fill(nextTitle(), address),
+            body: fill(nextBody(), address, { t: timeStr }),
             sound: soundFor(soundName),
             data: { kind: "water" },
             ...androidExtras,
+            ...extras,
           },
           trigger: { type: T.CALENDAR, hour, minute, repeats: true },
         });
@@ -130,6 +327,13 @@ export function syncTaskReminders({ tasks, times, enabled }) {
       const now = Date.now();
       const sorted = [...times].sort();
       let count = 0;
+      const address = await getAddress();
+      const extras = await visualExtras();
+      const nextTitle = makeDeck(TASK_TITLES);
+      const nextTodayOne = makeDeck(TASK_TODAY_ONE);
+      const nextTodayMany = makeDeck(TASK_TODAY_MANY);
+      const nextNextOne = makeDeck(TASK_NEXT_ONE);
+      const nextNextMany = makeDeck(TASK_NEXT_MANY);
 
       for (let d = 0; d < TASK_HORIZON_DAYS; d++) {
         // Hôm nay: chỉ task chưa xong. Các ngày sau: tất cả (ngày mới sẽ reset tiến độ).
@@ -144,23 +348,26 @@ export function syncTaskReminders({ tasks, times, enabled }) {
           fire.setHours(h, m, 0, 0);
           if (fire.getTime() <= now + 30000) continue; // đã qua giờ
 
-          const body =
+          const vars = { n: list.length === 1 ? list[0].title : names(list), c: list.length };
+          const tpl =
             d === 0
               ? list.length === 1
-                ? `Mục tiêu “${list[0].title}” chưa hoàn thành, check-in ngay nhé!`
-                : `Còn ${list.length} mục tiêu chưa xong: ${names(list)}`
+                ? nextTodayOne()
+                : nextTodayMany()
               : list.length === 1
-                ? `Mục tiêu hôm nay: “${list[0].title}”`
-                : `Hôm nay có ${list.length} mục tiêu: ${names(list)}`;
+                ? nextNextOne()
+                : nextNextMany();
+          const body = fill(tpl, address, vars);
 
-          await Notifications.scheduleNotificationAsync({
+          await scheduleSafe({
             identifier: `task-${dateKey(fire)}-${timeStr}`,
             content: {
-              title: "Nhắc mục tiêu hôm nay 🎯",
+              title: fill(nextTitle(), address),
               body,
               sound: "default",
               data: { kind: "task" },
               ...androidExtras,
+              ...extras,
             },
             trigger: { type: T.DATE, date: fire },
           });
@@ -206,19 +413,18 @@ export function notifyNewTasks(tasks, { userKey, enabled }) {
       const fresh = tasks.filter((t) => !known.has(String(t.id)));
       if (!fresh.length || !enabled) return fresh.length;
 
-      await Notifications.scheduleNotificationAsync({
+      const address = await getAddress();
+      const extras = await visualExtras();
+      const one = fresh.length === 1;
+      const vars = { n: one ? fresh[0].title : names(fresh), c: fresh.length };
+      await scheduleSafe({
         content: {
-          title:
-            fresh.length === 1
-              ? "Có mục tiêu mới! 🎯"
-              : `Có ${fresh.length} mục tiêu mới! 🎯`,
-          body:
-            fresh.length === 1
-              ? `“${fresh[0].title}” — vào check-in ngay nhé!`
-              : names(fresh),
+          title: fill(pickOne(one ? NEW_TASK_TITLE_ONE : NEW_TASK_TITLE_MANY), address, vars),
+          body: fill(pickOne(one ? NEW_TASK_BODY_ONE : NEW_TASK_BODY_MANY), address, vars),
           sound: "default",
           data: { kind: "new_task", task_ids: fresh.map((t) => t.id) },
           ...androidExtras,
+          ...extras,
         },
         trigger: null, // báo ngay
       });
@@ -232,13 +438,16 @@ export function notifyNewTasks(tasks, { userKey, enabled }) {
 // ─── Thông báo thử ──────────────────────────────────────────────────────────
 export async function sendTestNotification(soundName) {
   try {
-    await Notifications.scheduleNotificationAsync({
+    const address = await getAddress();
+    const extras = await visualExtras();
+    await scheduleSafe({
       content: {
         title: "Thông báo thử 🔔",
-        body: "Nếu bạn nghe thấy âm thanh này là mọi thứ ổn rồi!",
+        body: fill(pickOne(TEST_BODIES), address),
         sound: soundFor(soundName),
         data: { kind: "test" },
         ...androidExtras,
+        ...extras,
       },
       trigger: { type: T.TIME_INTERVAL, seconds: 2 },
     });
