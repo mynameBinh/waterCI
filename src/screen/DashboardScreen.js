@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AIChatModal from "../components/AIChatModal";
 import FloatingAIButton from "../components/FloatingAIButton";
+import ScanningOverlay from "../components/ScanningOverlay";
 import HeaderComponent from "../components/HeaderComponent";
 import HistoryComponent from "../components/HistoryComponent";
 import MainActionButtonComponent from "../components/MainActionButtonComponent";
@@ -53,6 +54,12 @@ const API_BASE = "https://binhhn21-water-check-in-backend.hf.space";
 // SDK 54+/58: fetch toàn cục là expo/fetch, FormData KHÔNG còn hỗ trợ kiểu
 // RN cũ { uri, name, type } (gây lỗi "Unsupported FormDataPart implementation").
 // Phải append một Blob/File thật — ExpoFile (expo-file-system) là Blob đọc từ uri.
+// Lỗi mạng của fetch -> câu dễ hiểu; các lỗi khác (lý do do server / AI trả) giữ nguyên
+const friendlyScanError = (m = "") =>
+  /network|failed to fetch|timeout|timed out/i.test(m)
+    ? "Mạng chập chờn rồi, kiểm tra kết nối rồi thử lại nhé! 📶"
+    : m || "Có lỗi xảy ra, bạn thử lại nhé.";
+
 const buildImageFormData = (uri) => {
   const formData = new FormData();
   formData.append("image", new ExpoFile(uri));
@@ -163,6 +170,20 @@ export default function DashboardScreen({ token, onLogout }) {
 
   // Camera / AI
   const [aiLoading, setAiLoading] = useState(false);
+  // Overlay "đang quét": ảnh vừa chụp + loại quét (water | task)
+  const [scan, setScan] = useState({ uri: null, mode: "water" });
+  // Vị trí "ghế" huy hiệu AI trên ScanningOverlay -> nút AI nổi bay tới đó khi đang quét
+  const [scanTarget, setScanTarget] = useState(null);
+  // Chỗ avatar ở header khung chat -> nút AI nổi bay lên đứng đó khi chat mở (như chat head Messenger)
+  const [chatTarget, setChatTarget] = useState(null);
+  // Bong bóng tin nhắn từ AI (hiện cạnh nút nổi) — thay cho Alert "thành công"
+  const [aiBubble, setAiBubble] = useState(null);
+  const pendingAiComment = useRef(""); // câu cảm thán AI trả về ở bước quét nước, dùng khi user xác nhận
+  const showAIBubble = useCallback(
+    (text, meta, tone) => setAiBubble({ id: Date.now(), text, meta, tone }),
+    [],
+  );
+  const handleBubbleClose = useCallback(() => setAiBubble(null), []);
   const [showMiniCam, setShowMiniCam] = useState(false);
 
   // Volume modal
@@ -780,8 +801,8 @@ export default function DashboardScreen({ token, onLogout }) {
 
   // Chụp ảnh / zoom / flash nằm trong <CameraOverlay> (state riêng) để vuốt zoom
   // không làm re-render cả Dashboard. Ở đây chỉ còn các callback ổn định.
-  const handleCameraBegin = useCallback(() => setAiLoading(true), []);
-  const handleCameraFail = useCallback(() => setAiLoading(false), []);
+  // Chụp xong -> đóng khung camera -> submit* mới bật ScanningOverlay (có ảnh thật),
+  // nên overlay không còn đè lên giao diện camera.
   const handleCameraClose = useCallback(() => setShowMiniCam(false), []);
   const handleCameraPicture = useCallback((uri) => {
     setShowMiniCam(false);
@@ -803,6 +824,7 @@ export default function DashboardScreen({ token, onLogout }) {
   const submitTaskImage = useCallback(
     async (uri) => {
       if (!activeTask) return;
+      setScan({ uri, mode: "task" });
       setAiLoading(true);
       try {
         const formData = buildImageFormData(uri);
@@ -821,45 +843,77 @@ export default function DashboardScreen({ token, onLogout }) {
             typeof data.detail === "string" ? data.detail : "Check-in thất bại",
           );
         }
-        Alert.alert("Tuyệt vời!", data.message || "Check-in thành công ✅");
+        showAIBubble(
+          data.ai_comment || data.message || "Hoàn thành mục tiêu rồi, giỏi quá! ✅",
+          data.message,
+        );
         fetchActiveTask(true);
         fetchStreak(); // task cuối cùng có thể vừa giữ được streak
       } catch (err) {
-        Alert.alert("Check-in thất bại ❌", err.message);
+        // Lý do AI từ chối nằm sau "Chưa đúng yêu cầu: " -> chỉ hiện lý do trong bong bóng
+        const reason = friendlyScanError(err.message).replace(/^Chưa đúng yêu cầu:\s*/, "");
+        showAIBubble(reason, "Check-in mục tiêu chưa thành công", "error");
       } finally {
         setAiLoading(false);
       }
     },
-    [token, activeTask, authFetch, fetchActiveTask, fetchStreak],
+    [token, activeTask, authFetch, fetchActiveTask, fetchStreak, showAIBubble],
   );
   submitTaskRef.current = submitTaskImage;
 
   const submitImage = useCallback(
     async (uri) => {
+      setScan({ uri, mode: "water" });
       setAiLoading(true);
       try {
         const formData = buildImageFormData(uri);
-        const res = await authFetch(`${API_BASE}/api/checkin`, {
+        // Quét xong là LƯU LUÔN và trả về cả dữ liệu lẫn câu nhận xét (giống check-in mục tiêu)
+        const res = await authFetch(`${API_BASE}/api/checkin/auto`, {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           body: formData,
         });
-        if (!res.ok) throw new Error("Không phát hiện nước");
+        if (!res.ok) {
+          // 400: {detail:{message}} (không thấy nước) · 503: {detail:"..."} (AI bận)
+          const d = await res.json().catch(() => ({}));
+          const e = new Error(
+            d?.detail?.message ||
+              (typeof d?.detail === "string" ? d.detail : "Không phát hiện nước"),
+          );
+          e.aiComment = d?.detail?.ai_comment || ""; // lý do do AI nói (nếu có)
+          throw e;
+        }
         const data = await res.json();
-        const vol = data.max_volume || 250;
-        // Lưu image_url để gửi kèm khi user xác nhận — chưa lưu DB ở bước này
-        pendingImageUrl.current = data.image_url || "";
-        setMaxVolume(vol);
-        setContainerType(data.container_type || "unknown");
-        setVolumeSession((n) => n + 1);
-        setShowVolumeModal(true);
+        const vol = data.volume_ml || 0;
+        setCurrentWater((prev) => prev + vol);
+        setHistory((prev) => [
+          {
+            id: data.id ?? Date.now(),
+            time: new Date().toLocaleTimeString("vi-VN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+            volume: vol,
+          },
+          ...prev,
+        ]);
+        showAIBubble(
+          data.ai_comment || "Uống nước đều đặn, giỏi lắm luôn! 💧",
+          `+${vol} ml · ${data.container_name || "Check-in nước"}`,
+        );
+        fetchStreak(); // đủ nước + xong mục tiêu -> streak tăng
       } catch (err) {
-        Alert.alert("Check-in thất bại ❌", err.message);
+        const msg = friendlyScanError(err.message);
+        showAIBubble(
+          err.aiComment || msg,
+          err.aiComment ? msg : "Check-in nước chưa thành công",
+          "error",
+        );
       } finally {
         setAiLoading(false);
       }
     },
-    [token, authFetch],
+    [token, authFetch, showAIBubble, fetchStreak],
   );
   submitImageRef.current = submitImage;
 
@@ -896,10 +950,11 @@ export default function DashboardScreen({ token, onLogout }) {
         const errText = await res.text().catch(() => "");
         throw new Error(`HTTP ${res.status}: ${errText}`);
       }
-      Alert.alert(
-        "Tuyệt vời!",
-        `Check-in thành công ${confirmedVol}ml nước. 💧`,
+      showAIBubble(
+        pendingAiComment.current || "Uống nước đều đặn, giỏi lắm luôn! 💧",
+        `+${confirmedVol} ml · Check-in nước`,
       );
+      pendingAiComment.current = "";
       fetchStreak(); // đủ nước + xong mục tiêu -> streak tăng
     } catch (err) {
       // Log để debug — kiểm tra console khi gặp lỗi (404 = backend chưa có route confirm)
@@ -907,12 +962,13 @@ export default function DashboardScreen({ token, onLogout }) {
       // Nếu lưu DB thất bại — rollback UI
       setCurrentWater((prev) => prev - confirmedVol);
       setHistory((prev) => prev.slice(1));
-      Alert.alert(
-        "Lỗi lưu dữ liệu ❌",
-        "Không thể lưu check-in lên server, vui lòng thử lại.",
+      showAIBubble(
+        "Chưa lưu được check-in lên máy chủ, bạn thử lại nhé! 🥺",
+        "Lỗi lưu dữ liệu",
+        "error",
       );
     }
-  }, [token, authFetch, fetchStreak]);
+  }, [token, authFetch, fetchStreak, showAIBubble]);
 
   const handleLogoutPrompt = useCallback(() => {
     Alert.alert("Đăng xuất", "Đăng xuất tài khoản này ư?", [
@@ -1282,6 +1338,7 @@ export default function DashboardScreen({ token, onLogout }) {
         token={token}
         apiBase={API_BASE}
         authFetch={authFetch}
+        onDockTarget={setChatTarget}
       />
 
       {/* ── MODAL CÀI ĐẶT NHẮC NHỞ (chuyển từ tab riêng sang đây) ── */}
@@ -1346,7 +1403,12 @@ export default function DashboardScreen({ token, onLogout }) {
       </Modal>
 
       {/* ── NÚT AI NỔI (kéo thả kiểu AssistiveTouch, hiện ở mọi tab) ── */}
-      <FloatingAIButton onPress={handleOpenAIChat} />
+      <FloatingAIButton
+        onPress={handleOpenAIChat}
+        bubble={aiBubble}
+        onBubbleClose={handleBubbleClose}
+        dockTarget={scanTarget || chatTarget}
+      />
 
       {/* ── DOCK ── */}
       <View
@@ -1503,9 +1565,7 @@ export default function DashboardScreen({ token, onLogout }) {
               : null
           }
           aiLoading={aiLoading}
-          onBegin={handleCameraBegin}
           onPicture={handleCameraPicture}
-          onFail={handleCameraFail}
           onClose={handleCameraClose}
         />
       )}
@@ -1522,15 +1582,13 @@ export default function DashboardScreen({ token, onLogout }) {
         />
       </Modal>
 
-      {/* ── AI LOADING OVERLAY ── */}
-      {aiLoading && (
-        <View style={styles.globalLoading}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[styles.loadingText, { color: colors.primary }]}>
-            Đang kiểm tra...
-          </Text>
-        </View>
-      )}
+      {/* ── OVERLAY ĐANG QUÉT (gửi ảnh cho AI, chờ kết quả) ── */}
+      <ScanningOverlay
+        visible={aiLoading}
+        uri={scan.uri}
+        mode={scan.mode}
+        onBadgeTarget={setScanTarget}
+      />
     </View>
   );
 }
@@ -1606,9 +1664,7 @@ const CameraOverlay = memo(function CameraOverlay({
   subtitle,
   frameWidth,
   aiLoading,
-  onBegin,
   onPicture,
-  onFail,
   onClose,
 }) {
   const [flash, setFlash] = useState("off");
@@ -1644,20 +1700,22 @@ const CameraOverlay = memo(function CameraOverlay({
     }),
   ).current;
 
+  const takingRef = useRef(false);
   const handleTake = useCallback(async () => {
-    if (!cameraRef.current || aiLoadingRef.current) return;
+    if (!cameraRef.current || aiLoadingRef.current || takingRef.current) return;
+    takingRef.current = true;
     try {
-      onBegin();
       // quality 0.5 + skipProcessing: true → nhanh hơn, nhẹ hơn, AI vẫn nhận diện tốt
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.5,
         skipProcessing: true,
       });
+      // onPicture đóng camera rồi mới bật overlay quét -> không đè lên nút chụp
       onPicture(photo.uri);
     } catch {
-      onFail();
+      takingRef.current = false; // chụp lỗi: cho bấm lại
     }
-  }, [onBegin, onPicture, onFail]);
+  }, [onPicture]);
 
   return (
     <View style={styles.cameraOverlay}>
