@@ -6,13 +6,19 @@
 //  • TÊN + NỘI DUNG khung chat (lời chào, gợi ý, placeholder…) : sửa ở AGENT_META bên dưới.
 //  • TÍNH CÁCH (prompt AI) : sửa ở backend main.py -> AI_AGENTS.
 //
-//  ⚠️ KEY trong AGENT_META phải TRÙNG key trong AI_THEMES  (và trùng key trong AI_AGENTS ở backend).
+//  ⚠️ KEY trong AGENT_META phải TRÙNG key trong AI_THEMES ("ai-avata", "whale-avata"). Lệch key sẽ có cảnh báo ở __DEV__.
 //     Backend còn nhận diện thêm theo TÊN agent, nên đặt `name` ở đây TRÙNG `name` trong AI_AGENTS.
 //
 //  Dùng trong component:
 //     const { key, name, content } = useAiAgent();
 //     const logo = useAppLogo();       // logo app theo agent + màu chủ đạo
 //     const bg = useAppBackground();   // ảnh nền app theo agent (null nếu không có)
+//
+//  ▶ APP-IMAGE (biểu tượng app + ảnh thông báo theo agent):
+//     AGENT_META[key].appImage = ảnh đại diện (1 ảnh hoặc map theo màu chủ đạo) — ảnh đính kèm thông báo.
+//     AGENT_META[key].appIcon  = id icon PHỤ của app (khớp AGENT_ICONS trong app.config.js).
+//                                Icon thật = id + màu, vd "TieuDauPink"; thiếu -> id gốc "TieuDau" -> icon mặc định.
+//     Xem thêm: src/context/appIcon.js (đồng bộ icon) và src/utils/notificationImage.js.
 // ─────────────────────────────────────────────────────────────────────────────
 import { useMemo } from "react";
 import {
@@ -48,11 +54,17 @@ export const FALLBACK_AGENT_NAME = "Trợ lý AI";
 //                    taskNextMany, newTaskTitleOne, newTaskTitleMany, newTaskBodyOne, newTaskBodyMany, testBodies
 //                    Biến: {a}=tên agent {me}/{Me}=xưng hô {u}/{U}=gọi người dùng {t}=giờ {n}=tên mục tiêu {c}=số lượng
 export const AGENT_META = {
-  tieudau: {
+  "ai-avata": {
     name: "Tiểu Đậu",
+    // ▶ APP-IMAGE: 1 ảnh, hoặc map theo màu chủ đạo { ocean, pink, yellow, orange, purple, green }
+    appImage: AI_THEMES["ai-avata"].images,
+    appIcon: "TieuDau", // id icon phụ — khớp AGENT_ICONS trong app.config.js
   },
-  whale: {
+  "whale-avata": {
     name: "Tiểu Ngư",
+    // ▶ APP-IMAGE: ocean dùng app-whale.png, các màu khác dùng ảnh cá voi theo màu
+    appImage: { ...AI_THEMES["whale-avata"].images, ocean: require("../../assets/avata/whale-avata/app-whale.png") },
+    appIcon: "Whale", // id icon phụ — khớp AGENT_ICONS trong app.config.js
     content: {
       emptyTitle: "Tiểu Ngư đây 🐳",
       emptySub: "Cứ hỏi mình về học tập, đời sống hay nhờ mình viết giúp một thứ gì đó nhé. Mình sẽ trả lời thật nhẹ nhàng.",
@@ -105,6 +117,16 @@ export const AGENT_META = {
   },
 };
 
+// Cảnh báo sớm nếu key AGENT_META và AI_THEMES lệch nhau (chỉ chạy khi dev)
+if (typeof __DEV__ !== "undefined" && __DEV__) {
+  Object.keys(AI_THEMES).forEach((k) => {
+    if (!AGENT_META[k]) console.warn(`[aiAgents] AI_THEMES có "${k}" nhưng AGENT_META thiếu key này`);
+  });
+  Object.keys(AGENT_META).forEach((k) => {
+    if (!AI_THEMES[k]) console.warn(`[aiAgents] AGENT_META có "${k}" nhưng AI_THEMES không có key này`);
+  });
+}
+
 // Bỏ dấu + ký tự lạ để so khớp tên (khớp với backend: "Tiểu Ngư" -> "tieungu")
 export const agentSlug = (name) => {
   let t = String(name || "").toLowerCase().replace(/đ/g, "d");
@@ -122,7 +144,7 @@ export const getAgentName = (key) =>
 const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 
 const defaultContent = (name, { me, userCall: u }) => ({
-  emptyTitle: `${name} có mặt🥰`,
+  emptyTitle: `${name} có mặt🐋`,
   emptySub: `Hỏi ${me} về học tập, giải trí, hay nhờ ${me} tạo nội dung. ${cap(me)} sẽ trả lời nhanh nhất có thể.`,
   cameraHintAppeal: `Chụp rõ hơn một chút để ${me} xem lại giúp ${u} nhé`,
   cameraHint: `Chụp thứ ${u} muốn hỏi: bài tập, tài liệu, món đồ…`,
@@ -152,8 +174,8 @@ export const getAgentContent = (key) => ({
 
 // Giọng thông báo đẩy của agent (xem hướng dẫn ở đầu file)
 export const getAgentVoice = (key) => ({
-  me: "em",
-  userCall: "bạn",
+  me: "tớ",
+  userCall: "cậu",
   templates: {},
   ...(AGENT_META[key]?.voice || {}),
 });
@@ -183,4 +205,29 @@ export const useAppBackground = () => {
   const { aiThemeKey, accentKey } = useTheme();
   const source = AGENT_META[aiThemeKey]?.appBackground || getAiBackground(aiThemeKey, accentKey);
   return source ? { source, style: getAiBackgroundStyle(aiThemeKey) } : null;
+};
+
+// ── APP-IMAGE ────────────────────────────────────────────────────────────────
+const safeThemeKey = (themeKey) => (AI_THEMES[themeKey] ? themeKey : DEFAULT_AI_THEME);
+
+// 1 ảnh (native: number, web: string / {uri}) hay map theo màu?
+const isSingleImage = (img) =>
+  typeof img === "number" || typeof img === "string" || (img && img.uri);
+
+// Ảnh app-image của agent theo màu chủ đạo (thiếu -> avatar của agent). Dùng được ngoài component.
+export const getAppImage = (themeKey, accentKey = "ocean") => {
+  const k = safeThemeKey(themeKey);
+  const img = AGENT_META[k]?.appImage;
+  if (!img) return getAiAvatar(k, accentKey);
+  if (isSingleImage(img)) return img;
+  return img[accentKey] || img.ocean || Object.values(img)[0] || getAiAvatar(k, accentKey);
+};
+
+// id icon phụ gốc của agent (vd "TieuDau"); null nếu agent không có icon riêng.
+export const getAppIconName = (themeKey) => AGENT_META[safeThemeKey(themeKey)]?.appIcon ?? null;
+
+// Hook: app-image của agent + màu đang chọn
+export const useAppImage = () => {
+  const { aiThemeKey, accentKey } = useTheme();
+  return getAppImage(aiThemeKey, accentKey);
 };

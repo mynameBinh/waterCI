@@ -10,6 +10,8 @@ import DashboardScreen from './src/screen/DashboardScreen';
 import { ThemeProvider } from './src/context/ThemeContext';
 // 👇 Animation mở app (phải nằm trong ThemeProvider)
 import StartupAnimation from './src/components/StartupAnimation';
+// 👇 Đồng bộ biểu tượng app theo AI-agent (app-image)
+import AppIconSync from './src/context/appIcon';
 
 // ─── Android: thanh điều hướng tự ẩn (sticky-immersive) ─────────────────────
 // Áp dụng ở gốc app để mọi màn hình (Auth, Loading, Admin, Dashboard) đều có
@@ -84,6 +86,7 @@ export default function App() {
   return (
     // 👇 Bọc ThemeProvider ôm trọn toàn bộ ứng dụng
     <ThemeProvider>
+      <AppIconSync />
       <SafeAreaProvider>
         <View style={styles.root}>
           {!isReady ? (
