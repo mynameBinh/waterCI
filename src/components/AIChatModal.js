@@ -27,34 +27,48 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAiAgent } from "../context/aiAgents";
 import { useTheme } from "../context/ThemeContext";
 import CameraOverlay from "./CameraOverlay";
 import ChatPlusSheet, { CHAT_MODELS } from "./ChatPlusSheet";
 import SmartCopySheet from "./SmartCopySheet";
 import { FILE_TYPES, copyText, createFile, parseReply, replyText, shareFile } from "./chatFiles";
 
-// ▶ ẢNH ICON AI THEO THEME: mỗi màu accent trong ThemeContext ứng với 1 ảnh trong assets/ai-avata/.
-//   (Metro bắt buộc require phải ghi đường dẫn tĩnh nên phải liệt kê từng ảnh như dưới.)
-//   Đường dẫn tính từ src/components -> ../../assets. Nếu thư mục assets nằm chỗ khác thì sửa ở đây.
-//   Nếu ảnh của bạn không phải .png thì đổi đuôi tương ứng.
-export const AI_AVATARS = {
-  ocean: require("../../assets/ai-avata/ai-avata-xanhduong.png"),
-  pink: require("../../assets/ai-avata/ai-avata-hong.png"),
-  yellow: require("../../assets/ai-avata/ai-avata-vang.png"),
-  orange: require("../../assets/ai-avata/ai-avata-cam.png"),
-  purple: require("../../assets/ai-avata/ai-avata-tim.png"),
-  green: require("../../assets/ai-avata/ai-avata-xanhla.png"),
-};
+// ▶ ẢNH ICON AI: nay nằm trong src/context/aiThemes.js (theme ảnh × màu accent).
+import {
+  AI_THEMES,
+  DEFAULT_AI_THEME,
+  getAiAvatar,
+  getAiAvatarStyle,
+  getAiBackground,
+  getAiBackgroundStyle,
+} from "../context/aiThemes";
 
-// Giữ lại để file khác (nút ở tab Tôi...) import cũ vẫn chạy – mặc định là màu xanh dương.
+// Giữ export cũ để file khác import vẫn chạy
+export const AI_AVATARS = AI_THEMES[DEFAULT_AI_THEME].images;
 export const AI_AVATAR = AI_AVATARS.ocean;
 
-// Hook: trả về avatar đúng với accent đang chọn. File khác có thể dùng:
+// Hook: trả về avatar đúng với AI-theme + màu accent đang chọn. File khác có thể dùng:
 //   import { useAiAvatar } from "../components/AIChatModal";
 //   const avatar = useAiAvatar();
 export const useAiAvatar = () => {
-  const { accentKey } = useTheme();
-  return AI_AVATARS[accentKey] || AI_AVATARS.ocean;
+  const { accentKey, aiThemeKey } = useTheme();
+  return getAiAvatar(aiThemeKey, accentKey);
+};
+
+// Hook: style phóng to riêng của AI-theme đang chọn (vd cá voi to hơn) -> gắn thêm vào style của <Image>
+export const useAiAvatarStyle = () => {
+  const { aiThemeKey } = useTheme();
+  return getAiAvatarStyle(aiThemeKey);
+};
+
+// Hook: ảnh + style cho màn hình trống. Theme có `background` -> dùng ảnh nền (đổi theo màu accent,
+// chỉ có 1 ảnh thì dùng ảnh đó); không có -> dùng avatar như cũ.
+export const useAiEmptyImage = () => {
+  const { accentKey, aiThemeKey } = useTheme();
+  const background = getAiBackground(aiThemeKey, accentKey);
+  if (background) return { source: background, style: getAiBackgroundStyle(aiThemeKey) };
+  return { source: getAiAvatar(aiThemeKey, accentKey), style: getAiAvatarStyle(aiThemeKey) };
 };
 
 // Các giới hạn này khớp với backend (chat_patch.py)
@@ -453,6 +467,9 @@ const AIChatModal = memo(function AIChatModal({
 }) {
   const { colors } = useTheme();
   const avatar = useAiAvatar();
+  const avatarStyle = useAiAvatarStyle();
+  const emptyImage = useAiEmptyImage();
+  const { key: agentKey, name: agentName, content: agentText } = useAiAgent(); // agent đang chọn: tên hiển thị + key gửi lên backend để đổi tính cách
   const insets = useSafeAreaInsets();
   // message: { id, role, content, files?: [{name, mime, data}], isError? }
   const [messages, setMessages] = useState([]);
@@ -528,7 +545,7 @@ const AIChatModal = memo(function AIChatModal({
     if (visible) scrollToEnd();
   }, [visible, scrollToEnd]);
 
-  // Có check-in bị từ chối đang chờ -> chat mở ra NỐI TIẾP câu thông báo của Tiểu Đậu (kèm ảnh vừa chụp).
+  // Có check-in bị từ chối đang chờ -> chat mở ra NỐI TIẾP câu thông báo của AI (kèm ảnh vừa chụp).
   // Ảnh gốc nằm tạm trên server nên các lượt sau KHÔNG gửi lại ảnh, chỉ gửi lời giải thích.
   useEffect(() => {
     if (!visible || !appeal || seededRef.current === appeal.id || sending) return;
@@ -794,7 +811,7 @@ const AIChatModal = memo(function AIChatModal({
   );
 
   const clearMemory = useCallback(() => {
-    Alert.alert("Quên tất cả?", "Tiểu Đậu sẽ không còn nhớ gì nữa!.", [
+    Alert.alert("Quên tất cả?", `${agentName} sẽ không còn nhớ gì nữa!.`, [
       { text: "Huỷ", style: "cancel" },
       {
         text: "Quên hết",
@@ -891,7 +908,7 @@ const AIChatModal = memo(function AIChatModal({
     try {
       const { status } = await Camera.requestCameraPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Cần quyền Camera", "Bạn cho phép ứng dụng dùng camera trong Cài đặt để chụp ảnh gửi cho Tiểu Đậu nhé.");
+        Alert.alert("Cần quyền Camera", `Bạn cho phép ứng dụng dùng camera trong Cài đặt để chụp ảnh gửi cho ${agentName} nhé.`);
         return;
       }
       Keyboard.dismiss();
@@ -982,6 +999,8 @@ const AIChatModal = memo(function AIChatModal({
           model: prefs.model,
           thinking: prefs.thinking,
           web_search: prefs.webSearch,
+          agent: agentKey, // backend đổi tên + tính cách AI theo agent
+          agent_name: agentName, // dự phòng: backend khớp theo tên nếu key không trùng
           // đang giải thích cho check-in bị từ chối -> server tự đính kèm lại ảnh tạm cho AI xem
           appeal_id: inAppealRef.current && appealRef.current?.status === "open" ? appealRef.current.id : undefined,
         }),
@@ -1048,7 +1067,7 @@ const AIChatModal = memo(function AIChatModal({
       setSending(false);
       scrollToEnd();
     }
-  }, [input, pending, sending, prefs, authFetch, apiBase, token, scrollToEnd, onAppealChange]);
+  }, [input, pending, sending, prefs, authFetch, apiBase, token, scrollToEnd, onAppealChange, agentKey]);
 
   // Bắt đầu cuộc trò chuyện mới (cuộc cũ vẫn nằm trong Lịch sử)
   const newChat = useCallback(() => {
@@ -1060,6 +1079,20 @@ const AIChatModal = memo(function AIChatModal({
     seededRef.current = null; // mở lại chat vẫn có thể quay về khiếu nại còn hạn
     setPanel(null);
   }, [sending]);
+
+  // Đổi AI-agent trong Hồ sơ -> khởi tạo chat MỚI (cuộc cũ vẫn nằm trong Lịch sử), không nối tiếp đoạn chat của agent trước
+  const prevAgentRef = useRef(agentKey);
+  useEffect(() => {
+    if (prevAgentRef.current === agentKey) return;
+    prevAgentRef.current = agentKey;
+    setMessages([]);
+    setPending([]);
+    setInput("");
+    setConvId(null);
+    setInAppeal(false);
+    seededRef.current = null;
+    setPanel(null);
+  }, [agentKey]);
 
   const renderItem = useCallback(
     ({ item, index }) => {
@@ -1084,7 +1117,7 @@ const AIChatModal = memo(function AIChatModal({
         >
           {!mine &&
             (lastOfGroup ? (
-              <Image source={avatar} style={styles.msgAvatar} />
+              <Image source={avatar} fadeDuration={0} resizeMethod="scale" style={[styles.msgAvatar, avatarStyle]} />
             ) : (
               <View style={styles.msgAvatarSpacer} />
             ))}
@@ -1246,20 +1279,20 @@ const AIChatModal = memo(function AIChatModal({
         </View>
       );
     },
-    [colors, avatar, copiedId, quickCopy, messages, sending, send, exportCtx, markDone, appeal, onAppealApproved],
+    [colors, avatar, avatarStyle, copiedId, quickCopy, messages, sending, send, exportCtx, markDone, appeal, onAppealApproved],
   );
 
   const empty = (
     <View style={styles.emptyWrap}>
       <View style={[styles.emptyGlow, { backgroundColor: colors.primarySoft }]}>
-        <Image source={avatar} style={styles.emptyAvatar} />
+        <Image source={emptyImage.source} fadeDuration={0} resizeMethod="scale" style={[styles.emptyAvatar, emptyImage.style]} />
       </View>
-      <Text style={[styles.emptyTitle, { color: colors.text }]}>Tiểu Đậu có mặt🥰</Text>
+      <Text style={[styles.emptyTitle, { color: colors.text }]}>{agentText.emptyTitle}</Text>
       <Text style={[styles.emptySub, { color: colors.textMuted }]}>
-        hỏi em về học tập, giải trí, hay nhờ em tạo nội dung. Em sẽ trả lời nhanh nhất có thể.
+        {agentText.emptySub}
       </Text>
       <View style={styles.sugGrid}>
-        {SUGGESTIONS.map((s) => (
+        {agentText.suggestions.map((s) => (
           <TouchableOpacity
             key={s.text}
             style={[styles.sugCard, { backgroundColor: colors.card, borderColor: colors.border }]}
@@ -1288,7 +1321,6 @@ const AIChatModal = memo(function AIChatModal({
     <View style={styles.host}>
       <Animated.View
         renderToHardwareTextureAndroid={opening}
-        shouldRasterizeIOS={opening}
         style={[
           styles.fill,
           {
@@ -1335,9 +1367,9 @@ const AIChatModal = memo(function AIChatModal({
           >
             <Ionicons name="chevron-down" size={26} color={colors.text} />
           </TouchableOpacity>
-          <Image source={avatar} style={styles.headerAvatar} />
+          <Image source={avatar} fadeDuration={0} resizeMethod="scale" style={[styles.headerAvatar, avatarStyle]} />
           <View style={{ flex: 1 }}>
-            <Text numberOfLines={1} style={[styles.headerTitle, { color: colors.text }]}>Tiểu Đậu</Text>
+            <Text numberOfLines={1} style={[styles.headerTitle, { color: colors.text }]}>{agentName}</Text>
             <Text numberOfLines={1} style={[styles.headerSub, { color: colors.textMuted }]}>
               {sending
                 ? sendLabel
@@ -1400,7 +1432,7 @@ const AIChatModal = memo(function AIChatModal({
           ListFooterComponent={
             sending ? (
               <View style={[styles.msgRow, styles.rowAi]}>
-                <Image source={avatar} style={styles.msgAvatar} />
+                <Image source={avatar} fadeDuration={0} resizeMethod="scale" style={[styles.msgAvatar, avatarStyle]} />
                 <View
                   style={[
                     styles.bubble,
@@ -1480,7 +1512,7 @@ const AIChatModal = memo(function AIChatModal({
               onChangeText={setInput}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
-              placeholder={inAppeal && appeal?.status === "open" ? "Giải thích với Tiểu Đậu…" : "Nhắn cho Tiểu Đậu…"}
+              placeholder={inAppeal && appeal?.status === "open" ? agentText.appealPlaceholder : agentText.placeholder}
               placeholderTextColor={colors.textMuted}
               multiline
               maxLength={MAX_INPUT}
@@ -1605,7 +1637,7 @@ const AIChatModal = memo(function AIChatModal({
                 <Ionicons name="chevron-back" size={26} color={colors.text} />
               </TouchableOpacity>
               <Text style={[styles.headerTitle, { color: colors.text, flex: 1, marginLeft: 6 }]}>
-                {panel === "history" ? "Lịch sử chat" : "Tiểu Đậu đang nhớ"}
+                {panel === "history" ? "Lịch sử chat" : agentText.memoryTitle}
               </Text>
               {panel === "memory" && memories.length > 0 && (
                 <TouchableOpacity onPress={clearMemory} hitSlop={8} style={styles.panelAction}>
@@ -1688,7 +1720,7 @@ const AIChatModal = memo(function AIChatModal({
                       <Text style={[styles.panelEmpty, { color: colors.textMuted, marginTop: 4 }]}>
                         {histQuery
                           ? "Thử từ khoá khác nhé."
-                          : "Nhắn cho Tiểu Đậu một câu để bắt đầu nhé 💬"}
+                          : agentText.historyEmpty}
                       </Text>
                     </View>
                   }
@@ -1750,8 +1782,7 @@ const AIChatModal = memo(function AIChatModal({
                 contentContainerStyle={styles.panelList}
                 ListHeaderComponent={
                   <Text style={[styles.panelHint, { color: colors.textMuted }]}>
-                    Tiểu Đậu chỉ ghi nhớ khi chị nhờ, ví dụ: “Hãy nhớ chị tên là …”, “Từ giờ gọi em là …”,
-                    “Em đang học trường …”. Chị có thể xoá từng điều ở đây bất cứ lúc nào.
+                    {agentText.memoryHint}
                   </Text>
                 }
                 ListEmptyComponent={
@@ -1781,7 +1812,7 @@ const AIChatModal = memo(function AIChatModal({
         <CameraOverlay
           large
           colors={colors}
-          title="Chụp ảnh gửi Tiểu Đậu"
+          title={`Chụp ảnh gửi ${agentName}`}
           subtitle={
             inAppeal && appeal?.status === "open"
               ? "Chụp rõ hơn một chút để em xem lại giúp chị nhé"

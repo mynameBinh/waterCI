@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { useColorScheme, View } from "react-native";
+import { AI_THEMES, DEFAULT_AI_THEME } from "./aiThemes";
 
 export const ThemeContext = createContext();
 
@@ -219,21 +220,26 @@ export const ThemeProvider = ({ children }) => {
   const [themePreference, setThemePreference] = useState("system");
   const [accentKey, setAccentKey] = useState(DEFAULT_ACCENT);
   const [decorationKey, setDecorationKey] = useState(DEFAULT_DECORATION);
+  const [aiThemeKey, setAiThemeKey] = useState(DEFAULT_AI_THEME);
   const [isReady, setIsReady] = useState(false);
 
   // Vừa mở app là móc trong kho ra xem trước đó sếp chọn theme + màu gì
   useEffect(() => {
     const loadTheme = async () => {
       try {
-        const [savedTheme, savedAccent, savedDeco] = await Promise.all([
-          AsyncStorage.getItem("themePreference"),
-          AsyncStorage.getItem("accentPreference"),
-          AsyncStorage.getItem("decorationPreference"),
-        ]);
+        const [savedTheme, savedAccent, savedDeco, savedAiTheme] =
+          await Promise.all([
+            AsyncStorage.getItem("themePreference"),
+            AsyncStorage.getItem("accentPreference"),
+            AsyncStorage.getItem("decorationPreference"),
+            AsyncStorage.getItem("aiThemePreference"),
+          ]);
         if (savedTheme) setThemePreference(savedTheme);
         if (savedAccent && ACCENTS[savedAccent]) setAccentKey(savedAccent);
         if (savedDeco && DECORATIONS.some((d) => d.key === savedDeco))
           setDecorationKey(savedDeco);
+        if (savedAiTheme && AI_THEMES[savedAiTheme])
+          setAiThemeKey(savedAiTheme);
       } catch (e) {
       } finally {
         setIsReady(true);
@@ -265,6 +271,15 @@ export const ThemeProvider = ({ children }) => {
     setDecorationKey(newDeco);
     try {
       await AsyncStorage.setItem("decorationPreference", newDeco);
+    } catch (e) {}
+  };
+
+  // Hàm lưu AI-theme (phong cách ảnh AI) sếp vừa chọn
+  const changeAiTheme = async (newKey) => {
+    if (!AI_THEMES[newKey]) return;
+    setAiThemeKey(newKey);
+    try {
+      await AsyncStorage.setItem("aiThemePreference", newKey);
     } catch (e) {}
   };
 
@@ -328,8 +343,11 @@ export const ThemeProvider = ({ children }) => {
       decorationKey,
       changeDecoration,
       decorations: DECORATIONS,
+      aiThemeKey,
+      changeAiTheme,
+      aiThemes: AI_THEMES,
     }),
-    [themePreference, activeTheme, colors, accentKey, decorationKey],
+    [themePreference, activeTheme, colors, accentKey, decorationKey, aiThemeKey],
   );
 
   // Chưa đọc xong theme đã lưu: splash native vẫn đang che (preventAutoHideAsync ở trên) nên trả null là an toàn

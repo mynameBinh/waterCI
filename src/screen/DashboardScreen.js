@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AIChatModal from "../components/AIChatModal";
 import CameraOverlay from "../components/CameraOverlay";
 import FloatingAIButton from "../components/FloatingAIButton";
+import { agentSlug, getAgentName } from "../context/aiAgents";
 import SavingOverlay from "../components/SavingOverlay";
 import ScanningOverlay from "../components/ScanningOverlay";
 import HeaderComponent from "../components/HeaderComponent";
@@ -112,7 +113,12 @@ const sameJSON = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function DashboardScreen({ token, onLogout }) {
-  const { colors, accentKey } = useTheme();
+  const { colors, accentKey, aiThemeKey } = useTheme();
+  // Agent đang chọn -> gửi kèm các request check-in để backend viết nhận xét đúng tên + tính cách agent
+  const agentKeyRef = useRef(aiThemeKey);
+  agentKeyRef.current = aiThemeKey;
+  const agentSlugRef = useRef("");
+  agentSlugRef.current = agentSlug(getAgentName(aiThemeKey)); // header chỉ nhận ASCII nên gửi tên đã bỏ dấu
   const insets = useSafeAreaInsets();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
@@ -253,11 +259,11 @@ export default function DashboardScreen({ token, onLogout }) {
     "15:00",
     "20:00",
   ]);
-  // Cách Tiểu Đậu gọi người dùng trong thông báo ("anh" | "chị"), lấy từ ghi nhớ trên server
+  // Cách AI gọi người dùng trong thông báo ("anh" | "chị"), lấy từ ghi nhớ trên server
   const [notifAddress, setNotifAddress] = useState(null);
   // Gán theme + cách xưng hô cho utils/notifications (chỉ gán biến, nên đặt ở thân component để luôn
   // chạy TRƯỚC mọi effect đặt lịch bên dưới)
-  setNotificationVoice({ accent: accentKey, address: notifAddress });
+  setNotificationVoice({ accent: accentKey, aiTheme: aiThemeKey, address: notifAddress });
   const waterCfgRef = useRef({ push: false, times: [] });
   const voiceMountedRef = useRef(false);
   const presetTimes = useMemo(
@@ -405,7 +411,7 @@ export default function DashboardScreen({ token, onLogout }) {
       times: taskRemindTimes,
       enabled: isPushEnabled && taskRemindEnabled,
     }).then((pending) => setBadge(isPushEnabled ? pending : 0));
-  }, [tasksLoaded, activeTasks, taskRemindTimes, taskRemindEnabled, isPushEnabled, accentKey, notifAddress]);
+  }, [tasksLoaded, activeTasks, taskRemindTimes, taskRemindEnabled, isPushEnabled, accentKey, aiThemeKey, notifAddress]);
 
   // ── Nhắc uống nước: đặt lại khi đổi theme / cách xưng hô để ảnh + câu chữ khớp ──────────
   useEffect(() => {
@@ -418,9 +424,9 @@ export default function DashboardScreen({ token, onLogout }) {
     }
     if (isPushEnabled) syncWaterReminders(selectedTimes, true, selectedSoundRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accentKey, notifAddress]);
+  }, [accentKey, aiThemeKey, notifAddress]);
 
-  // ── Lấy cách xưng hô (anh/chị) mà người dùng đã nhờ Tiểu Đậu ghi nhớ ─────────────────────
+  // ── Lấy cách xưng hô (anh/chị) mà người dùng đã nhờ AI ghi nhớ ─────────────────────
   const refreshNotifVoice = useCallback(async () => {
     try {
       const res = await authFetch(`${API_BASE}/api/chat/address`, {
@@ -445,7 +451,7 @@ export default function DashboardScreen({ token, onLogout }) {
       fetchStreak();
       getPermissionStatus().then(setPermissionStatus);
       refreshNotifVoice();
-      // Đặt lại nhắc uống nước -> mỗi lần mở app Tiểu Đậu có câu nhắc ngẫu nhiên mới
+      // Đặt lại nhắc uống nước -> mỗi lần mở app AI có câu nhắc ngẫu nhiên mới
       const cfg = waterCfgRef.current;
       if (cfg.push) syncWaterReminders(cfg.times, true, selectedSoundRef.current);
     });
@@ -906,7 +912,7 @@ export default function DashboardScreen({ token, onLogout }) {
           `${API_BASE}/api/tasks/${activeTask.id}/checkin`,
           {
             method: "POST",
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: `Bearer ${token}`, "X-AI-Agent": agentKeyRef.current, "X-AI-Agent-Name": agentSlugRef.current },
             body: formData,
           },
         );
@@ -951,7 +957,7 @@ export default function DashboardScreen({ token, onLogout }) {
         const formData = buildImageFormData(uri);
         const res = await authFetch(`${API_BASE}/api/checkin`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}`, "X-AI-Agent": agentKeyRef.current, "X-AI-Agent-Name": agentSlugRef.current },
           body: formData,
         });
         if (!res.ok) {

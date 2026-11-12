@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Asset } from "expo-asset";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { DEFAULT_AI_THEME, AI_THEMES, getAiAvatar } from "../context/aiThemes";
 import { ACCENTS } from "../context/ThemeContext";
 
 const T = Notifications.SchedulableTriggerInputTypes;
@@ -48,10 +49,12 @@ const ADDRESS_KEY = "notif_user_address";
 const DEFAULT_ADDRESS = "chị"; // khớp mặc định của server (NOTIF_DEFAULT_ADDRESS)
 let userAddress = null;
 let accentKey = "ocean";
+let aiThemeKey = DEFAULT_AI_THEME;
 
 // Gọi từ DashboardScreen mỗi lần render (chỉ gán biến, rất nhẹ). Trả về true nếu cách xưng hô đổi.
-export function setNotificationVoice({ accent, address } = {}) {
+export function setNotificationVoice({ accent, aiTheme, address } = {}) {
   if (accent && ACCENTS[accent]) accentKey = accent;
+  if (aiTheme && AI_THEMES[aiTheme]) aiThemeKey = aiTheme;
   if (address === "anh" || address === "chị") {
     if (address !== userAddress) {
       userAddress = address;
@@ -161,32 +164,26 @@ const fill = (tpl, address, vars = {}) => {
 // iOS: đính ảnh avatar AI đúng màu theme làm thumbnail (attachments — chỉ iOS hỗ trợ theo TỪNG thông báo).
 // Android: expo-notifications không cho đổi ảnh lớn theo từng thông báo (ảnh nhỏ/lớn do plugin gắn lúc build),
 // nên đổi MÀU nhấn của thông báo theo màu theme.
-const AVATARS = {
-  ocean: require("../../assets/ai-avata/ai-avata-xanhduong.png"),
-  pink: require("../../assets/ai-avata/ai-avata-hong.png"),
-  yellow: require("../../assets/ai-avata/ai-avata-vang.png"),
-  green: require("../../assets/ai-avata/ai-avata-xanhla.png"),
-  purple: require("../../assets/ai-avata/ai-avata-tim.png"),
-  orange: require("../../assets/ai-avata/ai-avata-cam.png"),
-};
+// Ảnh lấy từ registry src/context/aiThemes.js: theo AI-theme đang chọn + màu accent (thiếu ảnh -> tấm mặc định).
 const avatarUriCache = {};
-function avatarUri(key) {
-  if (!avatarUriCache[key]) {
-    avatarUriCache[key] = Asset.fromModule(AVATARS[key])
+function avatarUri(themeKey, key) {
+  const cacheKey = `${themeKey}:${key}`;
+  if (!avatarUriCache[cacheKey]) {
+    avatarUriCache[cacheKey] = Asset.fromModule(getAiAvatar(themeKey, key))
       .downloadAsync()
       .then((a) => a.localUri || a.uri || null)
       .catch(() => null);
-    avatarUriCache[key].then((u) => {
-      if (!u) delete avatarUriCache[key]; // lỗi -> lần sau thử lại
+    avatarUriCache[cacheKey].then((u) => {
+      if (!u) delete avatarUriCache[cacheKey]; // lỗi -> lần sau thử lại
     });
   }
-  return avatarUriCache[key];
+  return avatarUriCache[cacheKey];
 }
 
 async function visualExtras() {
-  const key = AVATARS[accentKey] ? accentKey : "ocean";
+  const key = ACCENTS[accentKey] ? accentKey : "ocean";
   if (IS_ANDROID) return { color: ACCENTS[key]?.primary };
-  const uri = await avatarUri(key);
+  const uri = await avatarUri(aiThemeKey, key);
   return uri
     ? {
         attachments: [

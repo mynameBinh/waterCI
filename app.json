@@ -1,21 +1,21 @@
 {
   "expo": {
-    "name": "Water check-in",
+    "name": "Whale Check-In",
     "slug": "MyFirstApp",
-    "version": "2.2.0",
+    "version": "2.3.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/avata/whale-avata/app-whale.png",
     "scheme": "myfirstapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/icon.png",
+      "icon": "./assets/avata/whale-avata/app-whale.png",
       "bundleIdentifier": "com.tbinh.waterCheckIn",
       "deploymentTarget": "16.4"
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/icon.png"
+        "foregroundImage": "./assets/avata/whale-avata/app-whale.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.tbinh.waterCheckIn",
@@ -26,7 +26,7 @@
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/icon.png"
+      "favicon": "./assets/avata/whale-avata/app-whale.png"
     },
     "plugins": [
       "expo-router",
@@ -34,7 +34,7 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
-          "image": "./assets/icon.png",
+          "image": "./assets/avata/whale-avata/app-whale.png",
           "imageWidth": 76
         }
       ],
@@ -42,7 +42,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/avata/whale-avata/app-whale.png",
           "color": "#0ea5e9",
           "sounds": [
             "./assets/sound/pouring_water.mp3"

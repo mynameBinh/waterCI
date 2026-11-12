@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { memo, useState } from "react";
 import {
+  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -9,6 +10,8 @@ import {
   View,
 } from "react-native";
 import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated";
+import { getAgentName } from "../context/aiAgents";
+import { getAiAvatar } from "../context/aiThemes";
 import { useTheme } from "../context/ThemeContext";
 
 const THEME_OPTIONS = [
@@ -74,13 +77,18 @@ const ProfileTab = memo(function ProfileTab({
     decorations,
     decorationKey,
     changeDecoration,
+    aiThemes,
+    aiThemeKey,
+    changeAiTheme,
   } = useTheme();
   const accentList = Object.entries(accents || {});
-  const [accentOpen, setAccentOpen] = useState(false); // mặc định thu gọn
+  const [styleOpen, setStyleOpen] = useState(false); // mục gộp "Màu & nút chụp", mặc định thu gọn
   const currentAccent = accents?.[accentKey];
-  const [decoOpen, setDecoOpen] = useState(false); // mặc định thu gọn
   const decoList = decorations || [];
   const currentDeco = decoList.find((d) => d.key === decorationKey);
+  const aiThemeList = Object.entries(aiThemes || {});
+  const [aiOpen, setAiOpen] = useState(false); // mặc định thu gọn
+  const currentAgentName = getAgentName(aiThemeKey);
 
   return (
     <ScrollView
@@ -229,68 +237,61 @@ const ProfileTab = memo(function ProfileTab({
           })}
         </View>
 
-        {/* Màu chủ đạo — thu gọn, bấm vào mới xổ danh sách */}
-        {accentList.length === 0 ? (
-          <>
-            <View
-              style={[styles.divider, { backgroundColor: colors.border }]}
-            />
-            <Text style={[styles.notifSub, { color: colors.textMuted }]}>
-              Chưa có bảng màu — hãy thay file src/context/ThemeContext.js bằng
-              bản mới.
-            </Text>
-          </>
-        ) : (
+        {/* AI-agent: chọn nhân vật AI (đổi hình, tên và tính cách AI; ảnh đổi theo màu chủ đạo) */}
+        {aiThemeList.length > 0 && (
           <PickerSection
-            title="Màu chủ đạo"
+            title="AI-agent"
             colors={colors}
-            open={accentOpen}
-            onToggle={() => setAccentOpen((v) => !v)}
+            open={aiOpen}
+            onToggle={() => setAiOpen((v) => !v)}
             valueNode={
               <>
-                <View
-                  style={[
-                    styles.accentMiniDot,
-                    { backgroundColor: currentAccent?.primary },
-                  ]}
+                <Image
+                  source={getAiAvatar(aiThemeKey, accentKey)}
+                  fadeDuration={0}
+                  style={styles.aiMiniThumb}
                 />
                 <Text
                   style={[styles.accentCurrentLabel, { color: colors.textMuted }]}
                 >
-                  {currentAccent?.label}
+                  {currentAgentName}
                 </Text>
               </>
             }
           >
             <View style={styles.accentGrid}>
-              {accentList.map(([key, a]) => {
-                const active = accentKey === key;
+              {aiThemeList.map(([key]) => {
+                const active = aiThemeKey === key;
+                const name = getAgentName(key);
                 return (
                   <TouchableOpacity
                     key={key}
-                    style={styles.accentItem}
+                    style={styles.decoItem}
                     onPress={() => {
-                      changeAccent?.(key);
-                      setAccentOpen(false); // chọn xong tự thu gọn lại
+                      changeAiTheme?.(key);
+                      setAiOpen(false); // chọn xong tự thu gọn lại
                     }}
                     activeOpacity={0.8}
                     accessibilityRole="button"
-                    accessibilityLabel={`Màu ${a.label}`}
+                    accessibilityLabel={`AI-agent ${name}`}
                     accessibilityState={{ selected: active }}
                   >
                     <View
                       style={[
-                        styles.accentRing,
-                        { borderColor: active ? a.primary : "transparent" },
+                        styles.aiThumbBox,
+                        {
+                          borderColor: active ? colors.primary : colors.border,
+                          backgroundColor: active
+                            ? colors.primarySoft
+                            : colors.background,
+                        },
                       ]}
                     >
-                      <View
-                        style={[styles.accentDot, { backgroundColor: a.primary }]}
-                      >
-                        {active && (
-                          <Ionicons name="checkmark" size={20} color="#ffffff" />
-                        )}
-                      </View>
+                      <Image
+                        source={getAiAvatar(key, accentKey)}
+                        fadeDuration={0}
+                        style={styles.aiThumb}
+                      />
                     </View>
                     <Text
                       style={[
@@ -302,7 +303,7 @@ const ProfileTab = memo(function ProfileTab({
                       ]}
                       numberOfLines={1}
                     >
-                      {a.label}
+                      {name}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -311,82 +312,140 @@ const ProfileTab = memo(function ProfileTab({
           </PickerSection>
         )}
 
-        {/* Trang trí nút chụp ảnh — cũng thu gọn như màu chủ đạo */}
-        {decoList.length === 0 ? (
+        {/* Gộp "Màu chủ đạo" + "Trang trí nút chụp" thành 1 mục thu gọn */}
+        {accentList.length === 0 && decoList.length === 0 ? (
           <>
             <View
               style={[styles.divider, { backgroundColor: colors.border }]}
             />
             <Text style={[styles.notifSub, { color: colors.textMuted }]}>
-              Chưa có tuỳ chọn trang trí nút — hãy thay file
+              Chưa có bảng màu / trang trí nút — hãy thay file
               src/context/ThemeContext.js bằng bản mới.
             </Text>
           </>
         ) : (
           <PickerSection
-            title="Trang trí nút chụp"
+            title="Màu & nút chụp"
             colors={colors}
-            open={decoOpen}
-            onToggle={() => setDecoOpen((v) => !v)}
+            open={styleOpen}
+            onToggle={() => setStyleOpen((v) => !v)}
             valueNode={
               <>
+                <View
+                  style={[
+                    styles.accentMiniDot,
+                    { backgroundColor: currentAccent?.primary },
+                  ]}
+                />
                 <Text style={styles.decoMiniEmoji}>{currentDeco?.emoji}</Text>
-                <Text
-                  style={[styles.accentCurrentLabel, { color: colors.textMuted }]}
-                >
-                  {currentDeco?.label}
-                </Text>
               </>
             }
           >
-            <View style={styles.accentGrid}>
-              {decoList.map((d) => {
-                const active = decorationKey === d.key;
-                return (
-                  <TouchableOpacity
-                    key={d.key}
-                    style={styles.decoItem}
-                    onPress={() => {
-                      changeDecoration?.(d.key);
-                      setDecoOpen(false); // chọn xong tự thu gọn lại
-                    }}
-                    activeOpacity={0.8}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Trang trí ${d.label}`}
-                    accessibilityState={{ selected: active }}
-                  >
-                    <View
-                      style={[
-                        styles.decoBox,
-                        active
-                          ? {
-                              backgroundColor: colors.primarySoft,
-                              borderColor: colors.primary,
-                            }
-                          : {
-                              backgroundColor: colors.background,
-                              borderColor: colors.border,
+            {accentList.length > 0 && (
+              <>
+                <Text style={[styles.subTitle, { color: colors.textMuted }]}>
+                  Màu chủ đạo
+                </Text>
+                <View style={styles.accentGridTight}>
+                  {accentList.map(([key, a]) => {
+                    const active = accentKey === key;
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        style={styles.accentItem}
+                        onPress={() => changeAccent?.(key)}
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Màu ${a.label}`}
+                        accessibilityState={{ selected: active }}
+                      >
+                        <View
+                          style={[
+                            styles.accentRing,
+                            { borderColor: active ? a.primary : "transparent" },
+                          ]}
+                        >
+                          <View
+                            style={[styles.accentDot, { backgroundColor: a.primary }]}
+                          >
+                            {active && (
+                              <Ionicons name="checkmark" size={20} color="#ffffff" />
+                            )}
+                          </View>
+                        </View>
+                        <Text
+                          style={[
+                            styles.accentLabel,
+                            {
+                              color: active ? colors.text : colors.textMuted,
+                              fontWeight: active ? "700" : "600",
                             },
-                      ]}
-                    >
-                      <Text style={styles.decoEmoji}>{d.emoji}</Text>
-                    </View>
-                    <Text
-                      style={[
-                        styles.accentLabel,
-                        {
-                          color: active ? colors.text : colors.textMuted,
-                          fontWeight: active ? "700" : "600",
-                        },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {d.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {a.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            {decoList.length > 0 && (
+              <>
+                <Text
+                  style={[styles.subTitle, { color: colors.textMuted, marginTop: 6 }]}
+                >
+                  Trang trí nút chụp
+                </Text>
+                <View style={styles.accentGridTight}>
+                  {decoList.map((d) => {
+                    const active = decorationKey === d.key;
+                    return (
+                      <TouchableOpacity
+                        key={d.key}
+                        style={styles.decoItem}
+                        onPress={() => changeDecoration?.(d.key)}
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Trang trí ${d.label}`}
+                        accessibilityState={{ selected: active }}
+                      >
+                        <View
+                          style={[
+                            styles.decoBox,
+                            active
+                              ? {
+                                  backgroundColor: colors.primarySoft,
+                                  borderColor: colors.primary,
+                                }
+                              : {
+                                  backgroundColor: colors.background,
+                                  borderColor: colors.border,
+                                },
+                          ]}
+                        >
+                          <Text style={styles.decoEmoji}>{d.emoji}</Text>
+                        </View>
+                        <Text
+                          style={[
+                            styles.accentLabel,
+                            {
+                              color: active ? colors.text : colors.textMuted,
+                              fontWeight: active ? "700" : "600",
+                            },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {d.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            )}
           </PickerSection>
         )}
       </View>
@@ -470,6 +529,8 @@ const styles = StyleSheet.create({
   accentMiniDot: { width: 16, height: 16, borderRadius: 8, marginRight: 8 },
   accentCurrentLabel: { fontSize: 13, fontWeight: "600", marginRight: 6 },
   accentGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: 16 },
+  accentGridTight: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
+  subTitle: { fontSize: 12.5, fontWeight: "700", marginTop: 14, marginBottom: 10 },
   accentItem: { width: "33.333%", alignItems: "center", marginBottom: 14 },
   accentRing: {
     width: 56,
@@ -488,6 +549,16 @@ const styles = StyleSheet.create({
   },
   accentLabel: { marginTop: 6, fontSize: 12.5 },
   decoMiniEmoji: { fontSize: 16, marginRight: 8 },
+  aiMiniThumb: { width: 20, height: 20, borderRadius: 6, marginRight: 8 },
+  aiThumbBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 18,
+    borderWidth: 2,
+    padding: 3,
+    marginBottom: 6,
+  },
+  aiThumb: { width: "100%", height: "100%", borderRadius: 13 },
   decoItem: { width: "25%", alignItems: "center", marginBottom: 14 },
   decoBox: {
     width: 58,

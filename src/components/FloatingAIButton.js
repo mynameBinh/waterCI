@@ -11,7 +11,10 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { PixelRatio } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AI_THEMES, getAiAvatarStyle } from "../context/aiThemes";
+import { useAiAgent } from "../context/aiAgents";
 import { useTheme } from "../context/ThemeContext";
 import { useAiAvatar } from "./AIChatModal";
 
@@ -31,9 +34,20 @@ const MARGIN = 8; // khoảng cách tới mép màn hình
 const TAP_SLOP = 8; // kéo ít hơn số px này vẫn tính là "chạm"
 const IDLE_MS = 3000; // sau bấy lâu không đụng tới thì làm mờ
 const IDLE_OPACITY = 0.55;
+const IDLE_OPACITY_TRANSPARENT = 0.8; // ảnh đã xoá phông mà mờ tới 0.55 nhìn như bị nhoè -> chỉ mờ nhẹ
 const STORAGE_KEY = "ai_fab_position_v1";
 
+// Ảnh nút được vẽ to gấp HI_RES lần rồi thu lại -> phóng to / nhún không bị mờ.
+// Dùng 2 (tỉ lệ thu 2:1 được GPU lọc mịn). Thử 3 thì viền bị RĂNG CƯA; đặt 1 = tắt hiệu ứng này để so sánh.
+const HI_RES = 2;
+// Hiệu ứng nhún (lún xuống khi chạm, nhấc lên khi kéo) làm ảnh bị lấy mẫu lại mỗi khung hình -> dễ mờ.
+// false = bỏ nhún, nút chỉ di chuyển (ảnh luôn sắc nét); true = bật lại hiệu ứng cũ.
+const PRESS_FX = false;
+// Khi bay vào huy hiệu quét / lưu check-in: false = giữ nguyên kích thước nút (chỉ bay tới, không phóng to) -> ảnh không mờ.
+const DOCK_SCALE = false;
+
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+const snapPx = (v) => Math.round(v * PixelRatio.get()) / PixelRatio.get(); // làm tròn theo pixel thật -> ảnh không bị nội suy lệch nửa pixel khi kéo
 
 const TYPING_MS = 850; // "đang gõ…" trước khi hiện chữ
 const BUBBLE_GAP = 10;
@@ -76,7 +90,13 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const avatar = useAiAvatar(); // ảnh AI đổi theo màu theme
-  const { colors } = useTheme();
+  const { colors, aiThemeKey } = useTheme();
+  const { name: agentName } = useAiAgent(); // tên agent đang chọn (không còn cố định "Tiểu Đậu")
+  // Riêng nút nổi: áp style của AI-theme (phóng to / bỏ bo tròn / resizeMode) và bỏ nền trắng tròn nếu ảnh đã xoá phông
+  const avatarStyle = getAiAvatarStyle(aiThemeKey);
+  const transparentFab = AI_THEMES[aiThemeKey]?.rounded === false;
+  const idleOpacityRef = useRef(IDLE_OPACITY);
+  idleOpacityRef.current = transparentFab ? IDLE_OPACITY_TRANSPARENT : IDLE_OPACITY;
 
   const bounds = {
     minX: MARGIN,
@@ -95,7 +115,10 @@ const FloatingAIButton = memo(function FloatingAIButton({
   // Vị trí mặc định: mép phải, hơi cao hơn dock
   const x = useRef(new Animated.Value(bounds.maxX)).current;
   const y = useRef(new Animated.Value(Math.max(bounds.minY, bounds.maxY - 80))).current;
-  const scale = useRef(new Animated.Value(1)).current;
+  const scale = useRef(new Animated.Value(1)).current; // chỉ dùng cho hiệu ứng chạm / kéo / ẩn (thay đổi nhỏ)
+  // Phóng to khi bay vào huy hiệu. Ảnh bên trong được vẽ ở độ phân giải gấp HI_RES lần (xem styles.hiRes) nên
+  // phóng to / nhún bằng transform vẫn sắc nét; trước đây iOS chỉ giải mã ảnh đúng 56pt rồi kéo giãn -> mờ.
+  const dockScale = useRef(new Animated.Value(1)).current;
   const opacity = useRef(new Animated.Value(1)).current;
   const hide = useRef(new Animated.Value(hidden ? 1 : 0)).current; // 0 = hiện, 1 = ẩn
   const liftedRef = useRef(false);
@@ -133,7 +156,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const scheduleIdle = useRef(() => {
     clearTimeout(idleTimer.current);
     idleTimer.current = setTimeout(() => {
-      Animated.timing(opacity, { toValue: IDLE_OPACITY, duration: 350, useNativeDriver: false }).start();
+      Animated.timing(opacity, { toValue: idleOpacityRef.current, duration: 350, useNativeDriver: false }).start();
     }, IDLE_MS);
   }).current;
 
@@ -243,8 +266,8 @@ const FloatingAIButton = memo(function FloatingAIButton({
       Animated.parallel([
         Animated.spring(x, { toValue: dockX - SIZE / 2, useNativeDriver: false, friction: 8, tension: 55 }),
         Animated.spring(y, { toValue: dockY - SIZE / 2, useNativeDriver: false, friction: 8, tension: 55 }),
-        Animated.spring(scale, {
-          toValue: dockSize ? dockSize / SIZE : 1,
+        Animated.spring(dockScale, {
+          toValue: DOCK_SCALE && dockSize ? dockSize / SIZE : 1,
           useNativeDriver: false,
           friction: 7,
           tension: 70,
@@ -262,7 +285,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
         Animated.parallel([
           Animated.spring(x, { toValue: toX, useNativeDriver: false, friction: 8, tension: 55 }),
           Animated.spring(y, { toValue: toY, useNativeDriver: false, friction: 8, tension: 55 }),
-          Animated.spring(scale, { toValue: 1, useNativeDriver: false, friction: 7, tension: 70 }),
+          Animated.spring(dockScale, { toValue: 1, useNativeDriver: false, friction: 7, tension: 70 }),
         ]).start(({ finished }) => {
           if (!finished || dockedRef.current) return; // bị ngắt vì lại có bước mới -> giữ nguyên trạng thái bay
           setDocked(false);
@@ -320,16 +343,16 @@ const FloatingAIButton = memo(function FloatingAIButton({
         startRef.current = { ...posRef.current };
         wake();
         liftedRef.current = false;
-        Animated.spring(scale, { toValue: 0.88, useNativeDriver: false, friction: 7, tension: 200 }).start(); // lún xuống khi chạm
+        Animated.spring(scale, { toValue: PRESS_FX ? 0.88 : 1, useNativeDriver: false, friction: 7, tension: 200 }).start(); // lún xuống khi chạm
       },
       onPanResponderMove: (_, g) => {
         const b = boundsRef.current;
         if (!liftedRef.current && Math.hypot(g.dx, g.dy) > TAP_SLOP) {
           liftedRef.current = true;
-          Animated.spring(scale, { toValue: 1.1, useNativeDriver: false, friction: 6 }).start(); // nhấc lên khi kéo
+          Animated.spring(scale, { toValue: PRESS_FX ? 1.1 : 1, useNativeDriver: false, friction: 6 }).start(); // nhấc lên khi kéo
         }
-        x.setValue(clamp(startRef.current.x + g.dx, b.minX, b.maxX));
-        y.setValue(clamp(startRef.current.y + g.dy, b.minY, b.maxY));
+        x.setValue(snapPx(clamp(startRef.current.x + g.dx, b.minX, b.maxX)));
+        y.setValue(snapPx(clamp(startRef.current.y + g.dy, b.minY, b.maxY)));
       },
       onPanResponderRelease: (_, g) => {
         Animated.spring(scale, { toValue: 1, useNativeDriver: false, friction: 4, tension: 160 }).start();
@@ -381,7 +404,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
             }}
             accessibilityRole="button"
             accessibilityLiveRegion="polite"
-            accessibilityLabel={`Tiểu Đậu: ${shown.text}`}
+            accessibilityLabel={`${agentName}: ${shown.text}`}
             style={[
               styles.bubble,
               {
@@ -398,7 +421,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
             ) : (
               <>
                 <Text style={[styles.bubbleName, { color: isErr ? "#ef4444" : colors.primary }]}>
-                  {isErr ? "Tiểu Đậu · chưa được rồi" : "Tiểu Đậu"}
+                  {isErr ? `${agentName} · chưa được rồi` : agentName}
                 </Text>
                 <Text numberOfLines={4} style={[styles.bubbleText, { color: colors.text }]}>
                   {shown.text}
@@ -419,22 +442,25 @@ const FloatingAIButton = memo(function FloatingAIButton({
       pointerEvents={docked || hidden ? "none" : "auto"}
       accessible
       accessibilityRole="button"
-      accessibilityLabel="Trò chuyện với AI"
+      accessibilityLabel={`Trò chuyện với ${agentName}`}
       onAccessibilityTap={() => onPressRef.current?.({ x: posRef.current.x + SIZE / 2, y: posRef.current.y + SIZE / 2 })}
       style={[
         styles.fab,
         docked && styles.fabDocked, // nổi trên cả ScanningOverlay (zIndex 1000)
+        transparentFab && styles.fabTransparent,
         {
           opacity: Animated.multiply(opacity, hide.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })),
           transform: [
             { translateX: x },
             { translateY: y },
-            { scale: Animated.multiply(scale, hide.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] })) },
+            { scale: Animated.multiply(Animated.multiply(scale, dockScale), hide.interpolate({ inputRange: [0, 1], outputRange: [1, 0.4] })) },
           ],
         },
       ]}
     >
-      <Image source={avatar} style={styles.img} />
+      <View pointerEvents="none" style={styles.hiRes}>
+        <Image source={avatar} fadeDuration={0} resizeMethod="scale" style={[styles.img, avatarStyle]} />
+      </View>
       {badge && <View pointerEvents="none" style={[styles.badge, { borderColor: colors.card }]} />}
     </Animated.View>
     </>
@@ -450,7 +476,7 @@ const styles = StyleSheet.create({
     top: 0,
     width: SIZE,
     height: SIZE,
-    borderRadius: SIZE / 2,
+    borderRadius: 999, // tròn ở mọi kích thước (nút to ra khi bay vào huy hiệu)
     zIndex: 999,
     elevation: 24, // Android: nổi trên dock
     shadowColor: "#000",
@@ -460,7 +486,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
   },
   fabDocked: { zIndex: 1002, elevation: 40 },
-  img: { width: "100%", height: "100%", borderRadius: SIZE / 2 },
+  // ảnh xoá phông: bỏ nền trắng + khung tròn (giữ elevation để vẫn nổi trên dock ở Android)
+  fabTransparent: { backgroundColor: "transparent", borderRadius: 0 },
+  // vùng vẽ ảnh to gấp HI_RES lần nút, thu lại bằng transform và căn giữa nút
+  hiRes: {
+    position: "absolute",
+    width: SIZE * HI_RES,
+    height: SIZE * HI_RES,
+    left: -(SIZE * (HI_RES - 1)) / 2,
+    top: -(SIZE * (HI_RES - 1)) / 2,
+    transform: [{ scale: 1 / HI_RES }],
+  },
+  img: { width: "100%", height: "100%", borderRadius: 999 },
   badge: { position: "absolute", top: 1, right: 1, width: 14, height: 14, borderRadius: 7, backgroundColor: "#ef4444", borderWidth: 2 },
   bubbleHost: {
     position: "absolute",
