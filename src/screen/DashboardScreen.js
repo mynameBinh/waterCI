@@ -542,7 +542,21 @@ export default function DashboardScreen({ token, onLogout }) {
           AsyncStorage.getItem(STORAGE_NEW_TASK_NOTIFY),
         ]);
 
-        const enabled = savedEnabled === "true";
+        let enabled = savedEnabled === "true";
+        // MÁY MỚI (chưa từng bật/tắt): trước đây mặc định TẮT nên máy khác không có nhắc uống nước, nhắc task
+        // và báo task mới cho tới khi tự vào bật. Giờ xin quyền 1 lần ngay lần đầu mở app và bật luôn nếu được cấp.
+        // Bị từ chối -> lưu "false" để không hỏi lại (người dùng vẫn bật tay được trong tab Thông báo).
+        if (savedEnabled === null) {
+          try {
+            const { status: cur } = await Notifications.getPermissionsAsync();
+            const status = cur === "granted" ? cur : (await Notifications.requestPermissionsAsync()).status;
+            setPermissionStatus(status);
+            enabled = status === "granted";
+            await AsyncStorage.setItem(STORAGE_PUSH_ENABLED, enabled ? "true" : "false");
+          } catch {
+            /* không xin được quyền -> để người dùng tự bật */
+          }
+        }
         const times = savedTimes
           ? JSON.parse(savedTimes)
           : ["08:00", "12:00", "15:00", "20:00"];

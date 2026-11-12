@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Asset } from "expo-asset";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import { getAgentName } from "../context/aiAgents";
 import { DEFAULT_AI_THEME, AI_THEMES, getAiAvatar } from "../context/aiThemes";
 import { ACCENTS } from "../context/ThemeContext";
 
@@ -14,7 +15,7 @@ export const TASK_DEFAULT_TIMES = ["09:00", "19:00"];
 
 // Đặt lịch nhắc task cho hôm nay + (HORIZON - 1) ngày tới. iOS chỉ giữ tối đa
 // 64 thông báo đang chờ, nên có trần MAX_TASK_NOTIFS (chừa chỗ cho nhắc uống nước).
-const TASK_HORIZON_DAYS = 3;
+const TASK_HORIZON_DAYS = 7; // nhiều ngày hơn -> người không mở app vài hôm vẫn nhận được nhắc (vẫn bị chặn bởi MAX_TASK_NOTIFS)
 const MAX_TASK_NOTIFS = 40;
 
 // Tên âm thanh người dùng chọn -> file trong app.
@@ -42,19 +43,23 @@ const soundFor = (name) =>
       ? (SOUND_FILES[name] ?? "default")
       : "default";
 
-// ─── Giọng "Tiểu Đậu" ────────────────────────────────────────────────────────
-// Tiểu Đậu xưng "em", gọi người dùng là "anh" / "chị". Cách gọi lấy từ server (điều người dùng đã nhờ
+// ─── Giọng của AI-agent đang chọn ────────────────────────────────────────────────────────
+// Agent xưng "em", gọi người dùng là "anh" / "chị". Cách gọi lấy từ server (điều người dùng đã nhờ
 // AI ghi nhớ) và được lưu lại để dùng được cả khi offline. {u} = anh|chị, {U} = Anh|Chị.
 const ADDRESS_KEY = "notif_user_address";
 const DEFAULT_ADDRESS = "chị"; // khớp mặc định của server (NOTIF_DEFAULT_ADDRESS)
 let userAddress = null;
 let accentKey = "ocean";
 let aiThemeKey = DEFAULT_AI_THEME;
+let agentName = getAgentName(DEFAULT_AI_THEME); // thay cho {a} trong câu chữ
 
 // Gọi từ DashboardScreen mỗi lần render (chỉ gán biến, rất nhẹ). Trả về true nếu cách xưng hô đổi.
 export function setNotificationVoice({ accent, aiTheme, address } = {}) {
   if (accent && ACCENTS[accent]) accentKey = accent;
-  if (aiTheme && AI_THEMES[aiTheme]) aiThemeKey = aiTheme;
+  if (aiTheme && AI_THEMES[aiTheme]) {
+    aiThemeKey = aiTheme;
+    agentName = getAgentName(aiTheme);
+  }
   if (address === "anh" || address === "chị") {
     if (address !== userAddress) {
       userAddress = address;
@@ -77,7 +82,7 @@ async function getAddress() {
 }
 
 const WATER_TITLES = [
-  "Tiểu Đậu nhắc {u} nè 💧",
+  "{a} nhắc {u} nè 💧",
   "Uống nước thôi {u} ơi! 🥤",
   "Ting ting! Giờ uống nước rồi 💦",
   "{U} ơi, em khát giùm {u} nè 🐳",
@@ -92,20 +97,20 @@ const WATER_BODIES = [
   "Em nhắc nhẹ thôi nha: {t} rồi, {u} uống nước chưa ạ? 🐥",
   "Da đẹp dáng xinh là nhờ uống nước, {u} ơi! Em chờ ảnh check-in nè 📸",
   "Ly nước này ngon lắm luôn, {u} thử đi nha! 🥤",
-  "Tiểu Đậu đến giao lời nhắc: uống nước thôi nào {u} 🌈",
+  "{a} đến giao lời nhắc: uống nước thôi nào {u} 🌈",
   "Đừng để em đợi lâu nha, {u} uống nước rồi khoe em xem nè 😚",
 ];
 
 const TASK_TITLES = [
   "Nhắc mục tiêu hôm nay 🎯",
-  "Tiểu Đậu nhắc {u} nè 🎯",
+  "{a} nhắc {u} nè 🎯",
   "{U} ơi, mục tiêu đang chờ nè 💪",
   "Cố lên {u} ơi! 🌟",
 ];
 const TASK_TODAY_ONE = [
   "Mục tiêu “{n}” còn chờ {u} nè, check-in liền cho em vui nha! 🎯",
   "Em thấy “{n}” chưa xong đó, {u} làm xíu là xong thôi à! 💪",
-  "“{n}” đang đợi {u} kìa, Tiểu Đậu cổ vũ hết mình nè! 📣",
+  "“{n}” đang đợi {u} kìa, {a} cổ vũ hết mình nè! 📣",
   "Sắp xong rồi, còn mỗi “{n}” thôi {u} ơi! Em tin {u} làm được ✨",
 ];
 const TASK_TODAY_MANY = [
@@ -121,15 +126,15 @@ const TASK_NEXT_MANY = [
   "Hôm nay {u} có {c} mục tiêu: {n}. Em tin {u} làm được hết! ✨",
   "Có {c} mục tiêu đang đợi {u} nè: {n}. Mình cùng cố lên nha! 🌟",
 ];
-const NEW_TASK_TITLE_ONE = ["Có mục tiêu mới nè {u} ơi! 🎯", "Tiểu Đậu báo tin vui nè! 🎉"];
-const NEW_TASK_TITLE_MANY = ["Có {c} mục tiêu mới nè {u} ơi! 🎯", "Tiểu Đậu báo tin vui: có {c} mục tiêu mới! 🎉"];
+const NEW_TASK_TITLE_ONE = ["Có mục tiêu mới nè {u} ơi! 🎯", "{a} báo tin vui nè! 🎉"];
+const NEW_TASK_TITLE_MANY = ["Có {c} mục tiêu mới nè {u} ơi! 🎯", "{a} báo tin vui: có {c} mục tiêu mới! 🎉"];
 const NEW_TASK_BODY_ONE = [
   "“{n}” — vào check-in liền nha, em chờ nè! 💨",
   "Mục tiêu mới “{n}” vừa tới, {u} xem thử nha! 👀",
 ];
 const NEW_TASK_BODY_MANY = ["{n} — {u} vào xem liền nha, em chờ nè! 💨"];
 const TEST_BODIES = [
-  "Tiểu Đậu thử loa nè! Nếu {u} nghe được âm thanh này là mọi thứ ổn rồi nha 💖",
+  "{a} thử loa nè! Nếu {u} nghe được âm thanh này là mọi thứ ổn rồi nha 💖",
   "Alo alo, em nghe rõ không {u} ơi? Có tiếng là ổn áp rồi đó! 🎶",
 ];
 
@@ -157,6 +162,7 @@ const fill = (tpl, address, vars = {}) => {
   return tpl
     .replace(/\{U\}/g, U)
     .replace(/\{u\}/g, address)
+    .replace(/\{a\}/g, agentName)
     .replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
 };
 
@@ -187,7 +193,7 @@ async function visualExtras() {
   return uri
     ? {
         attachments: [
-          { identifier: "tieu-dau-avatar", url: uri, typeHint: "public.png", hideThumbnail: false },
+          { identifier: "ai-avatar", url: uri, typeHint: "public.png", hideThumbnail: false },
         ],
       }
     : {};
@@ -253,6 +259,39 @@ async function cancelWhere(predicate) {
   );
 }
 
+// Android 8+: thông báo gắn channelId chưa tồn tại sẽ bị bỏ. Channel cũng được tạo ở DashboardScreen,
+// nhưng tạo lại ở đây (idempotent, cùng cấu hình) để lần đặt lịch ĐẦU TIÊN không bị chạy đua với nó.
+async function ensureAndroidChannel() {
+  if (!IS_ANDROID) return;
+  try {
+    await Notifications.setNotificationChannelAsync("water-reminder", {
+      name: "Nhắc nhở uống nước",
+      importance: Notifications.AndroidImportance.MAX,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: "#0ea5e9",
+      sound: ANDROID_SOUND,
+    });
+  } catch (e) {
+    console.warn("[notifications] Không tạo được channel:", e?.message || e);
+  }
+}
+
+// Chẩn đoán nhanh trên MÁY LỖI: console.log(await getNotificationDiagnostics())
+export async function getNotificationDiagnostics() {
+  try {
+    const perm = await Notifications.getPermissionsAsync();
+    const all = await Notifications.getAllScheduledNotificationsAsync();
+    const byKind = {};
+    all.forEach((n) => {
+      const k = n.content?.data?.kind || "khác";
+      byKind[k] = (byKind[k] || 0) + 1;
+    });
+    return { platform: Platform.OS, permission: perm.status, scheduled: all.length, byKind, agent: agentName };
+  } catch (e) {
+    return { error: String(e?.message || e) };
+  }
+}
+
 // ─── Quyền / badge ──────────────────────────────────────────────────────────
 export async function getPermissionStatus() {
   try {
@@ -274,6 +313,7 @@ export async function setBadge(count) {
 export function syncWaterReminders(times, enabled, soundName) {
   return serial(async () => {
     try {
+      await ensureAndroidChannel();
       // Chỉ huỷ nhắc uống nước (kể cả lịch cũ chưa gắn nhãn), KHÔNG đụng tới nhắc task.
       await cancelWhere((n) => {
         const kind = n.content?.data?.kind;
@@ -303,8 +343,8 @@ export function syncWaterReminders(times, enabled, soundName) {
           trigger: { type: T.CALENDAR, hour, minute, repeats: true },
         });
       }
-    } catch {
-      /* ignore */
+    } catch (e) {
+      console.warn("[notifications] Lỗi nhắc uống nước:", e?.message || e);
     }
   });
 }
@@ -318,6 +358,7 @@ export function syncTaskReminders({ tasks, times, enabled }) {
   return serial(async () => {
     const pendingToday = tasks.filter((t) => !isTaskDone(t));
     try {
+      await ensureAndroidChannel();
       await cancelWhere((n) => n.content?.data?.kind === "task");
       if (!enabled || !tasks.length || !times?.length) return pendingToday.length;
 
@@ -371,8 +412,8 @@ export function syncTaskReminders({ tasks, times, enabled }) {
           count++;
         }
       }
-    } catch {
-      /* ignore */
+    } catch (e) {
+      console.warn("[notifications] Lỗi nhắc task:", e?.message || e);
     }
     return pendingToday.length;
   });
@@ -426,7 +467,8 @@ export function notifyNewTasks(tasks, { userKey, enabled }) {
         trigger: null, // báo ngay
       });
       return fresh.length;
-    } catch {
+    } catch (e) {
+      console.warn("[notifications] Lỗi báo mục tiêu mới:", e?.message || e);
       return 0;
     }
   });
