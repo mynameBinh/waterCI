@@ -62,6 +62,21 @@ export const useAiAvatarStyle = () => {
   return getAiAvatarStyle(aiThemeKey);
 };
 
+// ── Hướng đầu của ảnh agent ──────────────────────────────────────────────────
+// "left"  = ảnh gốc quay đầu sang TRÁI (mặc định);  "right" = ảnh gốc quay đầu sang PHẢI.
+// Mục tiêu: agent luôn quay đầu vào phía trong màn hình / phía nội dung.
+//  • Nút nổi nằm mép PHẢI -> quay sang trái; nằm mép TRÁI -> lật lại quay sang phải.
+//  • Avatar trong khung chat đều nằm bên TRÁI -> cần quay sang phải.
+// Thấy ngược hướng thì chỉ cần đổi hằng số này.
+export const AVATAR_NATIVE_FACING = "left";
+
+// Lật ngang style ảnh (giữ nguyên các transform sẵn có của AI-theme như phóng to)
+export const flipAvatarStyle = (style) => {
+  const flat = StyleSheet.flatten(style) || {};
+  const t = Array.isArray(flat.transform) ? flat.transform : [];
+  return { ...flat, transform: [...t, { scaleX: -1 }] };
+};
+
 // Hook: ảnh + style cho màn hình trống. Theme có `background` -> dùng ảnh nền (đổi theo màu accent,
 // chỉ có 1 ảnh thì dùng ảnh đó); không có -> dùng avatar như cũ.
 export const useAiEmptyImage = () => {
@@ -467,7 +482,12 @@ const AIChatModal = memo(function AIChatModal({
 }) {
   const { colors } = useTheme();
   const avatar = useAiAvatar();
-  const avatarStyle = useAiAvatarStyle();
+  const baseAvatarStyle = useAiAvatarStyle();
+  // avatar trong khung chat nằm bên TRÁI -> lật để quay đầu về phía nội dung (xem AVATAR_NATIVE_FACING)
+  const avatarStyle = useMemo(
+    () => (AVATAR_NATIVE_FACING === "left" ? flipAvatarStyle(baseAvatarStyle) : baseAvatarStyle),
+    [baseAvatarStyle],
+  );
   const emptyImage = useAiEmptyImage();
   const { key: agentKey, name: agentName, content: agentText } = useAiAgent(); // agent đang chọn: tên hiển thị + key gửi lên backend để đổi tính cách
   const insets = useSafeAreaInsets();
@@ -1815,8 +1835,8 @@ const AIChatModal = memo(function AIChatModal({
           title={`Chụp ảnh gửi ${agentName}`}
           subtitle={
             inAppeal && appeal?.status === "open"
-              ? "Chụp rõ hơn một chút để em xem lại giúp chị nhé"
-              : "Chụp thứ chị muốn hỏi: bài tập, tài liệu, món đồ…"
+              ? agentText.cameraHintAppeal
+              : agentText.cameraHint
           }
           hint="Vuốt lên / xuống để zoom"
           frameWidth={Math.round(Math.min(340, winW * 0.84, winH * 0.44))}

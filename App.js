@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as NavigationBar from 'expo-navigation-bar';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
@@ -8,6 +8,8 @@ import AuthScreen from './src/screen/AuthScreen';
 import DashboardScreen from './src/screen/DashboardScreen';
 // 👇 Import bộ não Theme
 import { ThemeProvider } from './src/context/ThemeContext';
+// 👇 Animation mở app (phải nằm trong ThemeProvider)
+import StartupAnimation from './src/components/StartupAnimation';
 
 // ─── Android: thanh điều hướng tự ẩn (sticky-immersive) ─────────────────────
 // Áp dụng ở gốc app để mọi màn hình (Auth, Loading, Admin, Dashboard) đều có
@@ -46,8 +48,11 @@ export default function App() {
   const [token, setToken]       = useState(null);
   const [role, setRole]         = useState(null);
   const [isReady, setIsReady]   = useState(false);
+  const [showIntro, setShowIntro] = useState(true); // overlay animation mở app
 
   useAndroidAutoHideNavBar();
+
+  const handleIntroDone = useCallback(() => setShowIntro(false), []);
 
   const checkTokenRole = (userToken) => {
     try {
@@ -80,26 +85,32 @@ export default function App() {
     // 👇 Bọc ThemeProvider ôm trọn toàn bộ ứng dụng
     <ThemeProvider>
       <SafeAreaProvider>
-        {!isReady ? (
-          <View style={styles.loadingCenter}><ActivityIndicator size="large" color="#0ea5e9" /></View>
-        ) : !token ? (
-          <AuthScreen onLoginSuccess={handleLoginSuccess} />
-        ) : role === 'admin' ? (
-          <SafeAreaView style={styles.loadingCenter}>
-            <Text style={{ fontSize: 60, marginBottom: 20 }}>👑</Text>
-            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1e293b', textAlign: 'center' }}>Khu vực quản trị</Text>
-            <TouchableOpacity onPress={handleLogout} style={{ marginTop: 30, padding: 12, backgroundColor: '#f1f5f9', borderRadius: 8 }}>
-              <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>Đăng xuất</Text>
-            </TouchableOpacity>
-          </SafeAreaView>
-        ) : (
-          <DashboardScreen token={token} onLogout={handleLogout} />
-        )}
+        <View style={styles.root}>
+          {!isReady ? (
+            <View style={styles.loadingCenter}><ActivityIndicator size="large" color="#0ea5e9" /></View>
+          ) : !token ? (
+            <AuthScreen onLoginSuccess={handleLoginSuccess} />
+          ) : role === 'admin' ? (
+            <SafeAreaView style={styles.loadingCenter}>
+              <Text style={{ fontSize: 60, marginBottom: 20 }}>👑</Text>
+              <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1e293b', textAlign: 'center' }}>Khu vực quản trị</Text>
+              <TouchableOpacity onPress={handleLogout} style={{ marginTop: 30, padding: 12, backgroundColor: '#f1f5f9', borderRadius: 8 }}>
+                <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>Đăng xuất</Text>
+              </TouchableOpacity>
+            </SafeAreaView>
+          ) : (
+            <DashboardScreen token={token} onLogout={handleLogout} />
+          )}
+
+          {/* 👇 Animation mở app: phủ lên trên, chỉ mờ ra khi token đã đọc xong (isReady) */}
+          {showIntro && <StartupAnimation ready={isReady} onDone={handleIntroDone} />}
+        </View>
       </SafeAreaProvider>
     </ThemeProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f8fafc' }
 });

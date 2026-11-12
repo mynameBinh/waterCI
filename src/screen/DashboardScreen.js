@@ -26,7 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AIChatModal from "../components/AIChatModal";
 import CameraOverlay from "../components/CameraOverlay";
 import FloatingAIButton from "../components/FloatingAIButton";
-import { agentSlug, getAgentName } from "../context/aiAgents";
+import { agentSlug, getAgentContent, getAgentName } from "../context/aiAgents";
 import SavingOverlay from "../components/SavingOverlay";
 import ScanningOverlay from "../components/ScanningOverlay";
 import HeaderComponent from "../components/HeaderComponent";
@@ -117,6 +117,8 @@ export default function DashboardScreen({ token, onLogout }) {
   // Agent đang chọn -> gửi kèm các request check-in để backend viết nhận xét đúng tên + tính cách agent
   const agentKeyRef = useRef(aiThemeKey);
   agentKeyRef.current = aiThemeKey;
+  const agentTextRef = useRef(null); // câu cố định trong bong bóng AI theo agent (aiAgents.js)
+  agentTextRef.current = getAgentContent(aiThemeKey);
   const agentSlugRef = useRef("");
   agentSlugRef.current = agentSlug(getAgentName(aiThemeKey)); // header chỉ nhận ASCII nên gửi tên đã bỏ dấu
   const insets = useSafeAreaInsets();
@@ -259,7 +261,7 @@ export default function DashboardScreen({ token, onLogout }) {
     "15:00",
     "20:00",
   ]);
-  // Cách AI gọi người dùng trong thông báo ("anh" | "chị"), lấy từ ghi nhớ trên server
+  // Tên người dùng đã nhờ AI ghi nhớ (dùng để gọi họ trong thông báo), lấy từ server
   const [notifAddress, setNotifAddress] = useState(null);
   // Gán theme + cách xưng hô cho utils/notifications (chỉ gán biến, nên đặt ở thân component để luôn
   // chạy TRƯỚC mọi effect đặt lịch bên dưới)
@@ -434,7 +436,7 @@ export default function DashboardScreen({ token, onLogout }) {
       });
       if (!res.ok) return;
       const d = await res.json();
-      if (d?.address === "anh" || d?.address === "chị") setNotifAddress(d.address);
+      setNotifAddress(typeof d?.address === "string" ? d.address : ""); // tên người dùng đã nhờ AI ghi nhớ ("" = chưa có)
     } catch {
       /* offline -> dùng lại cách xưng hô đã lưu */
     }
@@ -941,7 +943,7 @@ export default function DashboardScreen({ token, onLogout }) {
           throw e;
         }
         showAIBubble(
-          data.ai_comment || data.message || "Hoàn thành mục tiêu rồi, giỏi quá! ✅",
+          data.ai_comment || data.message || agentTextRef.current.taskDoneFallback,
           data.message,
         );
         fetchActiveTask(true);
@@ -1037,6 +1039,8 @@ export default function DashboardScreen({ token, onLogout }) {
             headers: {
               Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
+              "X-AI-Agent": agentKeyRef.current,
+              "X-AI-Agent-Name": agentSlugRef.current,
             },
             body: JSON.stringify(
               appealId
@@ -1072,8 +1076,8 @@ export default function DashboardScreen({ token, onLogout }) {
         const wasAppeal = !!appealModeRef.current;
         showAIBubble(
           wasAppeal
-            ? "Em ghi nhận bù rùi nha, lần sau chụp rõ hơn xíu giúp em! 😾"
-            : pendingAiComment.current || "Uống nước đều đặn, giỏi lắm luôn! 💧",
+            ? agentTextRef.current.appealWaterDone
+            : pendingAiComment.current || agentTextRef.current.waterFallback,
           wasAppeal
             ? `+${confirmedVol} ml · Ghi nhận bù`
             : `+${confirmedVol} ml · Check-in nước`,
@@ -1139,6 +1143,8 @@ export default function DashboardScreen({ token, onLogout }) {
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
+            "X-AI-Agent": agentKeyRef.current,
+            "X-AI-Agent-Name": agentSlugRef.current,
           },
           body: JSON.stringify({}),
         });
@@ -1151,7 +1157,7 @@ export default function DashboardScreen({ token, onLogout }) {
           throw e;
         }
         setAppeal(null);
-        showAIBubble("Em ghi nhận bù mục tiêu cho chị rồi nha! ✅", data.message);
+        showAIBubble(agentTextRef.current.appealTaskDone, data.message);
         fetchActiveTask(true);
         fetchStreak();
       } catch (err) {

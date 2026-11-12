@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AI_THEMES, getAiAvatarStyle } from "../context/aiThemes";
 import { useAiAgent } from "../context/aiAgents";
 import { useTheme } from "../context/ThemeContext";
-import { useAiAvatar } from "./AIChatModal";
+import { AVATAR_NATIVE_FACING, useAiAvatar } from "./AIChatModal";
 
 // ── Nút AI nổi kiểu AssistiveTouch ──────────────────────────────────────────
 //  • Kéo đi bất cứ đâu trên màn hình; thả ra sẽ tự hít vào mép trái / phải gần nhất.
@@ -132,6 +132,15 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const startRef = useRef({ x: 0, y: 0 });
   const sideRef = useRef("right"); // "left" | "right"
   const [side, setSide] = useState("right"); // bản state của sideRef (để bong bóng đổi bên)
+  // Lật ngang ảnh để agent luôn quay đầu VÀO phía trong màn hình (1 = giữ nguyên, -1 = lật). Xoay mượt qua 0 như "quay đầu".
+  const flip = useRef(new Animated.Value(side === AVATAR_NATIVE_FACING ? -1 : 1)).current;
+  useEffect(() => {
+    Animated.timing(flip, {
+      toValue: side === AVATAR_NATIVE_FACING ? -1 : 1,
+      duration: 220,
+      useNativeDriver: false,
+    }).start();
+  }, [side, flip]);
   const yRatioRef = useRef(null); // 0..1 trong khoảng minY..maxY (để thích ứng khi đổi kích thước màn hình)
   const idleTimer = useRef(null);
   const loadedRef = useRef(false);
@@ -458,9 +467,12 @@ const FloatingAIButton = memo(function FloatingAIButton({
         },
       ]}
     >
-      <View pointerEvents="none" style={styles.hiRes}>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.hiRes, { transform: [{ scale: 1 / HI_RES }, { scaleX: flip }] }]}
+      >
         <Image source={avatar} fadeDuration={0} resizeMethod="scale" style={[styles.img, avatarStyle]} />
-      </View>
+      </Animated.View>
       {badge && <View pointerEvents="none" style={[styles.badge, { borderColor: colors.card }]} />}
     </Animated.View>
     </>

@@ -1,15 +1,20 @@
 import { Ionicons } from "@expo/vector-icons";
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
+  Animated,
+  Easing,
   Image,
+  Modal,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
-import Animated, { FadeInDown, FadeOutUp } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getAgentName } from "../context/aiAgents";
 import { getAiAvatar } from "../context/aiThemes";
 import { useTheme } from "../context/ThemeContext";
@@ -20,42 +25,142 @@ const THEME_OPTIONS = [
   { key: "system", icon: "settings-outline", label: "Hệ thống" },
 ];
 
-// Khối thu gọn: chỉ hiện 1 dòng (tiêu đề + giá trị đang chọn), bấm vào mới xổ nội dung
-const PickerSection = ({ title, valueNode, open, onToggle, colors, children }) => (
+// Tiêu đề của từng khối: tên mục bên trái, giá trị đang chọn bên phải (các lựa chọn hiện sẵn, không xổ xuống)
+const SectionHeader = ({ title, value, colors }) => (
+  <View style={styles.sectionHeader}>
+    <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 0 }]}>
+      {title}
+    </Text>
+    {!!value && (
+      <Text
+        style={[styles.sectionValue, { color: colors.primaryText }]}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    )}
+  </View>
+);
+
+// Dòng thu gọn: chỉ hiện tên mục + giá trị đang chọn, chạm vào mới mở bảng chọn
+const PickerRow = ({ title, valueNode, onPress, colors }) => (
   <>
     <View style={[styles.divider, { backgroundColor: colors.border }]} />
     <TouchableOpacity
-      style={styles.accentHeader}
-      onPress={onToggle}
+      style={styles.pickerRow}
+      onPress={onPress}
       activeOpacity={0.75}
       accessibilityRole="button"
       accessibilityLabel={title}
-      accessibilityState={{ expanded: open }}
     >
-      <Text
-        style={[styles.sectionTitle, { color: colors.text, marginBottom: 0 }]}
-      >
+      <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 0 }]}>
         {title}
       </Text>
-      <View style={styles.accentHeaderRight}>
+      <View style={styles.pickerRowRight}>
         {valueNode}
-        <Ionicons
-          name={open ? "chevron-up" : "chevron-down"}
-          size={20}
-          color={colors.textMuted}
-        />
+        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
       </View>
     </TouchableOpacity>
-    {open && (
-      <Animated.View
-        entering={FadeInDown.duration(220)}
-        exiting={FadeOutUp.duration(150)}
-      >
-        {children}
-      </Animated.View>
-    )}
   </>
 );
+
+// Bảng chọn trượt từ dưới lên: chạm vùng tối bên ngoài, bấm X hoặc nút Back (Android) là đóng.
+// Không xổ nội dung trong trang nên không phải kéo màn hình để tìm lựa chọn.
+const PickerSheet = ({ visible, onClose, title, colors, children }) => {
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  const [mounted, setMounted] = useState(visible);
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 240,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    } else {
+      Animated.timing(anim, {
+        toValue: 0,
+        duration: 180,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (finished) setMounted(false);
+      });
+    }
+  }, [visible, anim]);
+
+  if (!mounted) return null;
+
+  return (
+    <Modal
+      transparent
+      visible
+      animationType="none"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      <View style={styles.sheetRoot}>
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: "rgba(0,0,0,0.45)", opacity: anim },
+          ]}
+        >
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Đóng"
+          />
+        </Animated.View>
+        <Animated.View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: colors.card,
+              paddingBottom: Math.max(insets.bottom, 12) + 8,
+              maxHeight: height * 0.8,
+              transform: [
+                {
+                  translateY: anim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [height * 0.5, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
+          <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
+          <View style={styles.sheetHeader}>
+            <Text style={[styles.sheetTitle, { color: colors.text }]}>{title}</Text>
+            <TouchableOpacity
+              onPress={onClose}
+              hitSlop={10}
+              activeOpacity={0.7}
+              style={[styles.sheetClose, { backgroundColor: colors.background }]}
+              accessibilityRole="button"
+              accessibilityLabel="Đóng"
+            >
+              <Ionicons name="close" size={18} color={colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            bounces={false}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.sheetBody}
+          >
+            {children}
+          </ScrollView>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+};
 
 const ProfileTab = memo(function ProfileTab({
   username,
@@ -82,13 +187,13 @@ const ProfileTab = memo(function ProfileTab({
     changeAiTheme,
   } = useTheme();
   const accentList = Object.entries(accents || {});
-  const [styleOpen, setStyleOpen] = useState(false); // mục gộp "Màu & nút chụp", mặc định thu gọn
   const currentAccent = accents?.[accentKey];
   const decoList = decorations || [];
   const currentDeco = decoList.find((d) => d.key === decorationKey);
   const aiThemeList = Object.entries(aiThemes || {});
-  const [aiOpen, setAiOpen] = useState(false); // mặc định thu gọn
   const currentAgentName = getAgentName(aiThemeKey);
+  const [aiOpen, setAiOpen] = useState(false); // bảng chọn AI-agent
+  const [styleOpen, setStyleOpen] = useState(false); // bảng "Màu & nút chụp"
 
   return (
     <ScrollView
@@ -237,184 +342,202 @@ const ProfileTab = memo(function ProfileTab({
           })}
         </View>
 
-        {/* AI-agent: chọn nhân vật AI (đổi hình, tên và tính cách AI; ảnh đổi theo màu chủ đạo) */}
+        {/* AI-agent: dòng thu gọn, chạm vào mở bảng chọn trượt từ dưới lên.
+            Ảnh dùng resizeMode="contain" và KHÔNG phóng to -> PNG xoá phông luôn hiện đủ, không bị cắt. */}
         {aiThemeList.length > 0 && (
-          <PickerSection
-            title="AI-agent"
-            colors={colors}
-            open={aiOpen}
-            onToggle={() => setAiOpen((v) => !v)}
-            valueNode={
-              <>
-                <Image
-                  source={getAiAvatar(aiThemeKey, accentKey)}
-                  fadeDuration={0}
-                  style={styles.aiMiniThumb}
-                />
-                <Text
-                  style={[styles.accentCurrentLabel, { color: colors.textMuted }]}
-                >
-                  {currentAgentName}
-                </Text>
-              </>
-            }
-          >
-            <View style={styles.accentGrid}>
-              {aiThemeList.map(([key]) => {
-                const active = aiThemeKey === key;
-                const name = getAgentName(key);
-                return (
-                  <TouchableOpacity
-                    key={key}
-                    style={styles.decoItem}
-                    onPress={() => {
-                      changeAiTheme?.(key);
-                      setAiOpen(false); // chọn xong tự thu gọn lại
-                    }}
-                    activeOpacity={0.8}
-                    accessibilityRole="button"
-                    accessibilityLabel={`AI-agent ${name}`}
-                    accessibilityState={{ selected: active }}
-                  >
-                    <View
-                      style={[
-                        styles.aiThumbBox,
-                        {
-                          borderColor: active ? colors.primary : colors.border,
-                          backgroundColor: active
-                            ? colors.primarySoft
-                            : colors.background,
-                        },
-                      ]}
+          <>
+            <PickerRow
+              title="AI-agent"
+              colors={colors}
+              onPress={() => setAiOpen(true)}
+              valueNode={
+                <>
+                  <Image
+                    source={getAiAvatar(aiThemeKey, accentKey)}
+                    fadeDuration={0}
+                    resizeMode="contain"
+                    style={styles.miniThumb}
+                  />
+                  <Text style={[styles.rowValue, { color: colors.textMuted }]}>
+                    {currentAgentName}
+                  </Text>
+                </>
+              }
+            />
+            <PickerSheet
+              visible={aiOpen}
+              onClose={() => setAiOpen(false)}
+              title="Chọn AI-agent"
+              colors={colors}
+            >
+              <View style={styles.agentGrid}>
+                {aiThemeList.map(([key]) => {
+                  const active = aiThemeKey === key;
+                  const name = getAgentName(key);
+                  return (
+                    <TouchableOpacity
+                      key={key}
+                      style={styles.agentItem}
+                      onPress={() => {
+                        changeAiTheme?.(key);
+                        setTimeout(() => setAiOpen(false), 220); // cho thấy dấu tích rồi mới đóng
+                      }}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`AI-agent ${name}`}
+                      accessibilityState={{ selected: active }}
                     >
-                      <Image
-                        source={getAiAvatar(key, accentKey)}
-                        fadeDuration={0}
-                        style={styles.aiThumb}
-                      />
-                    </View>
-                    <Text
-                      style={[
-                        styles.accentLabel,
-                        {
-                          color: active ? colors.text : colors.textMuted,
-                          fontWeight: active ? "700" : "600",
-                        },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {name}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </PickerSection>
+                      <View
+                        style={[
+                          styles.agentBox,
+                          {
+                            borderColor: active ? colors.primary : colors.border,
+                            backgroundColor: active
+                              ? colors.primarySoft
+                              : colors.background,
+                          },
+                        ]}
+                      >
+                        <Image
+                          source={getAiAvatar(key, accentKey)}
+                          fadeDuration={0}
+                          resizeMode="contain"
+                          style={styles.agentImg}
+                        />
+                        {active && (
+                          <View
+                            style={[
+                              styles.checkBadge,
+                              {
+                                backgroundColor: colors.primary,
+                                borderColor: colors.card,
+                              },
+                            ]}
+                          >
+                            <Ionicons name="checkmark" size={12} color="#ffffff" />
+                          </View>
+                        )}
+                      </View>
+                      <Text
+                        style={[
+                          styles.itemLabel,
+                          {
+                            color: active ? colors.text : colors.textMuted,
+                            fontWeight: active ? "700" : "600",
+                          },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </PickerSheet>
+          </>
         )}
 
-        {/* Gộp "Màu chủ đạo" + "Trang trí nút chụp" thành 1 mục thu gọn */}
+        {/* Màu & nút chụp: dòng thu gọn, chạm vào mở bảng chọn (chọn nhiều lần, chạm ra ngoài để đóng) */}
         {accentList.length === 0 && decoList.length === 0 ? (
           <>
-            <View
-              style={[styles.divider, { backgroundColor: colors.border }]}
-            />
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <Text style={[styles.notifSub, { color: colors.textMuted }]}>
               Chưa có bảng màu / trang trí nút — hãy thay file
               src/context/ThemeContext.js bằng bản mới.
             </Text>
           </>
         ) : (
-          <PickerSection
-            title="Màu & nút chụp"
-            colors={colors}
-            open={styleOpen}
-            onToggle={() => setStyleOpen((v) => !v)}
-            valueNode={
-              <>
-                <View
-                  style={[
-                    styles.accentMiniDot,
-                    { backgroundColor: currentAccent?.primary },
-                  ]}
-                />
-                <Text style={styles.decoMiniEmoji}>{currentDeco?.emoji}</Text>
-              </>
-            }
-          >
-            {accentList.length > 0 && (
-              <>
-                <Text style={[styles.subTitle, { color: colors.textMuted }]}>
-                  Màu chủ đạo
-                </Text>
-                <View style={styles.accentGridTight}>
-                  {accentList.map(([key, a]) => {
-                    const active = accentKey === key;
-                    return (
-                      <TouchableOpacity
-                        key={key}
-                        style={styles.accentItem}
-                        onPress={() => changeAccent?.(key)}
-                        activeOpacity={0.8}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Màu ${a.label}`}
-                        accessibilityState={{ selected: active }}
-                      >
-                        <View
-                          style={[
-                            styles.accentRing,
-                            { borderColor: active ? a.primary : "transparent" },
-                          ]}
+          <>
+            <PickerRow
+              title="Màu & nút chụp"
+              colors={colors}
+              onPress={() => setStyleOpen(true)}
+              valueNode={
+                <>
+                  <View
+                    style={[
+                      styles.miniDot,
+                      { backgroundColor: currentAccent?.primary },
+                    ]}
+                  />
+                  <Text style={styles.miniEmoji}>{currentDeco?.emoji}</Text>
+                </>
+              }
+            />
+            <PickerSheet
+              visible={styleOpen}
+              onClose={() => setStyleOpen(false)}
+              title="Màu & nút chụp"
+              colors={colors}
+            >
+              {accentList.length > 0 && (
+                <>
+                  <SectionHeader
+                    title="Màu chủ đạo"
+                    value={currentAccent?.label}
+                    colors={colors}
+                  />
+                  <View style={styles.swatchRow}>
+                    {accentList.map(([key, a]) => {
+                      const active = accentKey === key;
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          style={styles.swatchItem}
+                          onPress={() => changeAccent?.(key)}
+                          activeOpacity={0.8}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Màu ${a.label}`}
+                          accessibilityState={{ selected: active }}
                         >
                           <View
-                            style={[styles.accentDot, { backgroundColor: a.primary }]}
+                            style={[
+                              styles.swatchRing,
+                              { borderColor: active ? a.primary : "transparent" },
+                            ]}
                           >
-                            {active && (
-                              <Ionicons name="checkmark" size={20} color="#ffffff" />
-                            )}
+                            <View
+                              style={[styles.swatchDot, { backgroundColor: a.primary }]}
+                            >
+                              {active && (
+                                <Ionicons name="checkmark" size={18} color="#ffffff" />
+                              )}
+                            </View>
                           </View>
-                        </View>
-                        <Text
-                          style={[
-                            styles.accentLabel,
-                            {
-                              color: active ? colors.text : colors.textMuted,
-                              fontWeight: active ? "700" : "600",
-                            },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {a.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </>
-            )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
 
-            {decoList.length > 0 && (
-              <>
-                <Text
-                  style={[styles.subTitle, { color: colors.textMuted, marginTop: 6 }]}
-                >
-                  Trang trí nút chụp
-                </Text>
-                <View style={styles.accentGridTight}>
-                  {decoList.map((d) => {
-                    const active = decorationKey === d.key;
-                    return (
-                      <TouchableOpacity
-                        key={d.key}
-                        style={styles.decoItem}
-                        onPress={() => changeDecoration?.(d.key)}
-                        activeOpacity={0.8}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Trang trí ${d.label}`}
-                        accessibilityState={{ selected: active }}
-                      >
-                        <View
+              {decoList.length > 0 && (
+                <>
+                  <View
+                    style={[
+                      styles.divider,
+                      { backgroundColor: colors.border, marginTop: 20 },
+                    ]}
+                  />
+                  <SectionHeader
+                    title="Trang trí nút chụp"
+                    value={currentDeco?.label}
+                    colors={colors}
+                  />
+                  <View style={styles.chipWrap}>
+                    {decoList.map((d) => {
+                      const active = decorationKey === d.key;
+                      return (
+                        <TouchableOpacity
+                          key={d.key}
+                          onPress={() => changeDecoration?.(d.key)}
+                          activeOpacity={0.8}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Trang trí ${d.label}`}
+                          accessibilityState={{ selected: active }}
                           style={[
-                            styles.decoBox,
+                            styles.chip,
                             active
                               ? {
                                   backgroundColor: colors.primarySoft,
@@ -426,27 +549,27 @@ const ProfileTab = memo(function ProfileTab({
                                 },
                           ]}
                         >
-                          <Text style={styles.decoEmoji}>{d.emoji}</Text>
-                        </View>
-                        <Text
-                          style={[
-                            styles.accentLabel,
-                            {
-                              color: active ? colors.text : colors.textMuted,
-                              fontWeight: active ? "700" : "600",
-                            },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {d.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </>
-            )}
-          </PickerSection>
+                          <Text style={styles.chipEmoji}>{d.emoji}</Text>
+                          <Text
+                            style={[
+                              styles.chipText,
+                              {
+                                color: active ? colors.primaryText : colors.textMuted,
+                                fontWeight: active ? "700" : "600",
+                              },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {d.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+            </PickerSheet>
+          </>
         )}
       </View>
 
@@ -520,55 +643,108 @@ const styles = StyleSheet.create({
   },
   themeText: { marginTop: 8, fontSize: 13, fontWeight: "600" },
   divider: { height: 1, marginTop: 18, marginBottom: 16 },
-  accentHeader: {
+  pickerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  accentHeaderRight: { flexDirection: "row", alignItems: "center" },
-  accentMiniDot: { width: 16, height: 16, borderRadius: 8, marginRight: 8 },
-  accentCurrentLabel: { fontSize: 13, fontWeight: "600", marginRight: 6 },
-  accentGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: 16 },
-  accentGridTight: { flexDirection: "row", flexWrap: "wrap", marginTop: 4 },
-  subTitle: { fontSize: 12.5, fontWeight: "700", marginTop: 14, marginBottom: 10 },
-  accentItem: { width: "33.333%", alignItems: "center", marginBottom: 14 },
-  accentRing: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  pickerRowRight: { flexDirection: "row", alignItems: "center" },
+  rowValue: { fontSize: 13, fontWeight: "600", marginRight: 6 },
+  miniThumb: { width: 26, height: 26, marginRight: 8 },
+  miniDot: { width: 16, height: 16, borderRadius: 8, marginRight: 8 },
+  miniEmoji: { fontSize: 16, marginRight: 8 },
+  // bảng chọn trượt từ dưới lên
+  sheetRoot: { flex: 1, justifyContent: "flex-end" },
+  sheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 10,
+  },
+  sheetHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    marginBottom: 12,
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginBottom: 16,
+  },
+  sheetTitle: { fontSize: 18, fontWeight: "800" },
+  sheetClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  sheetBody: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 8 },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+  sectionValue: { fontSize: 13, fontWeight: "700", marginLeft: 12, flexShrink: 1 },
+  itemLabel: { fontSize: 12.5, marginTop: 8 },
+  checkBadge: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  // AI-agent: ô vuông có chừa lề trong, ảnh co vừa khung (contain), không phóng to, không bo cắt ảnh
+  agentGrid: { flexDirection: "row", flexWrap: "wrap" },
+  agentItem: { width: "33.333%", alignItems: "center", marginBottom: 6 },
+  agentBox: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    borderWidth: 2,
+    padding: 8,
+  },
+  agentImg: { width: "100%", height: "100%" },
+  // Màu chủ đạo: 1 hàng, chia đều chiều ngang
+  swatchRow: { flexDirection: "row", marginHorizontal: -2 },
+  swatchItem: { flex: 1, alignItems: "center" },
+  swatchRing: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     borderWidth: 2.5,
     justifyContent: "center",
     alignItems: "center",
   },
-  accentDot: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+  swatchDot: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
   },
-  accentLabel: { marginTop: 6, fontSize: 12.5 },
-  decoMiniEmoji: { fontSize: 16, marginRight: 8 },
-  aiMiniThumb: { width: 20, height: 20, borderRadius: 6, marginRight: 8 },
-  aiThumbBox: {
-    width: 64,
-    height: 64,
-    borderRadius: 18,
-    borderWidth: 2,
-    padding: 3,
-    marginBottom: 6,
-  },
-  aiThumb: { width: "100%", height: "100%", borderRadius: 13 },
-  decoItem: { width: "25%", alignItems: "center", marginBottom: 14 },
-  decoBox: {
-    width: 58,
-    height: 58,
-    borderRadius: 18,
-    borderWidth: 2,
-    justifyContent: "center",
+  // Trang trí nút chụp
+  chipWrap: { flexDirection: "row", flexWrap: "wrap", marginRight: -8 },
+  chip: {
+    flexDirection: "row",
     alignItems: "center",
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    marginRight: 8,
+    marginBottom: 8,
   },
-  decoEmoji: { fontSize: 26 },
+  chipEmoji: { fontSize: 18, marginRight: 6 },
+  chipText: { fontSize: 13.5 },
   logoutIconBtn: {
     position: "absolute",
     top: 0,

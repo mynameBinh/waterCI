@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Asset } from "expo-asset";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
-import { getAgentName, getAppLogo } from "../context/aiAgents";
+import { getAgentName, getAgentVoice, getAppLogo } from "../context/aiAgents";
 import { DEFAULT_AI_THEME, AI_THEMES, getAiAvatar } from "../context/aiThemes";
 import { ACCENTS } from "../context/ThemeContext";
 
@@ -52,6 +52,7 @@ let userAddress = null;
 let accentKey = "ocean";
 let aiThemeKey = DEFAULT_AI_THEME;
 let agentName = getAgentName(DEFAULT_AI_THEME); // thay cho {a} trong câu chữ
+let agentVoice = getAgentVoice(DEFAULT_AI_THEME); // xưng hô + câu riêng của agent (AGENT_META[agent].voice)
 
 // Gọi từ DashboardScreen mỗi lần render (chỉ gán biến, rất nhẹ). Trả về true nếu cách xưng hô đổi.
 export function setNotificationVoice({ accent, aiTheme, address } = {}) {
@@ -59,11 +60,15 @@ export function setNotificationVoice({ accent, aiTheme, address } = {}) {
   if (aiTheme && AI_THEMES[aiTheme]) {
     aiThemeKey = aiTheme;
     agentName = getAgentName(aiTheme);
+    agentVoice = getAgentVoice(aiTheme);
   }
-  if (address === "anh" || address === "chị") {
-    if (address !== userAddress) {
-      userAddress = address;
-      AsyncStorage.setItem(ADDRESS_KEY, address).catch(() => {});
+  if (typeof address === "string") {
+    // address = TÊN người dùng đã nhờ AI ghi nhớ ("" = chưa có / đã quên). "anh"/"chị" trơn là giá trị cũ -> bỏ.
+    const v = address.trim().slice(0, 24);
+    const next = v && v !== "anh" && v !== "chị" ? v : null;
+    if (next !== userAddress) {
+      userAddress = next;
+      (next ? AsyncStorage.setItem(ADDRESS_KEY, next) : AsyncStorage.removeItem(ADDRESS_KEY)).catch(() => {});
       return true;
     }
   }
@@ -74,31 +79,38 @@ async function getAddress() {
   if (userAddress) return userAddress;
   try {
     const v = await AsyncStorage.getItem(ADDRESS_KEY);
-    if (v === "anh" || v === "chị") userAddress = v;
+    if (v && v !== "anh" && v !== "chị") userAddress = v;
   } catch {
     /* ignore */
   }
-  return userAddress || DEFAULT_ADDRESS;
+  return userAddress; // null = chưa có tên -> getUserCall dùng cách gọi mặc định của agent
 }
+
+// Cách gọi người dùng: tên họ đã nhờ AI ghi nhớ; chưa có thì dùng userCall của agent (AGENT_META[agent].voice.userCall).
+async function getUserCall() {
+  return (await getAddress()) || agentVoice.userCall;
+}
+// Bộ câu: agent có templates riêng (AGENT_META[agent].voice.templates[name]) thì dùng, không thì dùng câu mặc định.
+const pool = (name, dflt) => (Array.isArray(agentVoice.templates?.[name]) && agentVoice.templates[name].length ? agentVoice.templates[name] : dflt);
 
 const WATER_TITLES = [
   "{a} nhắc {u} nè 💧",
   "Uống nước thôi {u} ơi! 🥤",
   "Ting ting! Giờ uống nước rồi 💦",
-  "{U} ơi, em khát giùm {u} nè 🐳",
+  "{U} ơi, {me} khát giùm {u} nè 🐳",
   "Nước đang gọi {u} đó nha 🌊",
 ];
 const WATER_BODIES = [
-  "{t} rồi nè! {U} nhấp một ngụm cho em vui nha 🥺",
-  "Em canh giờ giùm {u} nè: uống nước rồi chụp check-in giữ chuỗi nha! 🔥",
-  "Cơ thể {u} đang réo gọi nước đó, em nghe thấy luôn á 💧",
-  "Một ly nước nhỏ xíu thôi, {u} làm được mà! Em cổ vũ nè 📣",
+  "{t} rồi nè! {U} nhấp một ngụm cho {me} vui nha 🥺",
+  "{Me} canh giờ giùm {u} nè: uống nước rồi chụp check-in giữ chuỗi nha! 🔥",
+  "Cơ thể {u} đang réo gọi nước đó, {me} nghe thấy luôn á 💧",
+  "Một ly nước nhỏ xíu thôi, {u} làm được mà! {Me} cổ vũ nè 📣",
   "Chuỗi streak đang chờ {u} đó, uống nước rồi check-in liền nha ✨",
-  "Em nhắc nhẹ thôi nha: {t} rồi, {u} uống nước chưa ạ? 🐥",
-  "Da đẹp dáng xinh là nhờ uống nước, {u} ơi! Em chờ ảnh check-in nè 📸",
+  "{Me} nhắc nhẹ thôi nha: {t} rồi, {u} uống nước chưa ạ? 🐥",
+  "Da đẹp dáng xinh là nhờ uống nước, {u} ơi! {Me} chờ ảnh check-in nè 📸",
   "Ly nước này ngon lắm luôn, {u} thử đi nha! 🥤",
   "{a} đến giao lời nhắc: uống nước thôi nào {u} 🌈",
-  "Đừng để em đợi lâu nha, {u} uống nước rồi khoe em xem nè 😚",
+  "Đừng để {me} đợi lâu nha, {u} uống nước rồi khoe {me} xem nè 😚",
 ];
 
 const TASK_TITLES = [
@@ -108,34 +120,34 @@ const TASK_TITLES = [
   "Cố lên {u} ơi! 🌟",
 ];
 const TASK_TODAY_ONE = [
-  "Mục tiêu “{n}” còn chờ {u} nè, check-in liền cho em vui nha! 🎯",
-  "Em thấy “{n}” chưa xong đó, {u} làm xíu là xong thôi à! 💪",
+  "Mục tiêu “{n}” còn chờ {u} nè, check-in liền cho {me} vui nha! 🎯",
+  "{Me} thấy “{n}” chưa xong đó, {u} làm xíu là xong thôi à! 💪",
   "“{n}” đang đợi {u} kìa, {a} cổ vũ hết mình nè! 📣",
-  "Sắp xong rồi, còn mỗi “{n}” thôi {u} ơi! Em tin {u} làm được ✨",
+  "Sắp xong rồi, còn mỗi “{n}” thôi {u} ơi! {Me} tin {u} làm được ✨",
 ];
 const TASK_TODAY_MANY = [
   "Còn {c} mục tiêu chưa xong nè {u} ơi: {n} 🎯",
-  "Em đếm được {c} mục tiêu đang chờ {u}: {n}. Cố lên nha! 💪",
-  "{U} ơi, còn {c} việc nho nhỏ: {n}. Xong hết em khen liền nha 💖",
+  "{Me} đếm được {c} mục tiêu đang chờ {u}: {n}. Cố lên nha! 💪",
+  "{U} ơi, còn {c} việc nho nhỏ: {n}. Xong hết {me} khen liền nha 💖",
 ];
 const TASK_NEXT_ONE = [
-  "Hôm nay {u} có mục tiêu “{n}” nè, em chờ ảnh check-in nha! 🌤️",
-  "Mục tiêu hôm nay của {u}: “{n}”. Em cổ vũ nè! 💪",
+  "Hôm nay {u} có mục tiêu “{n}” nè, {me} chờ ảnh check-in nha! 🌤️",
+  "Mục tiêu hôm nay của {u}: “{n}”. {Me} cổ vũ nè! 💪",
 ];
 const TASK_NEXT_MANY = [
-  "Hôm nay {u} có {c} mục tiêu: {n}. Em tin {u} làm được hết! ✨",
+  "Hôm nay {u} có {c} mục tiêu: {n}. {Me} tin {u} làm được hết! ✨",
   "Có {c} mục tiêu đang đợi {u} nè: {n}. Mình cùng cố lên nha! 🌟",
 ];
 const NEW_TASK_TITLE_ONE = ["Có mục tiêu mới nè {u} ơi! 🎯", "{a} báo tin vui nè! 🎉"];
 const NEW_TASK_TITLE_MANY = ["Có {c} mục tiêu mới nè {u} ơi! 🎯", "{a} báo tin vui: có {c} mục tiêu mới! 🎉"];
 const NEW_TASK_BODY_ONE = [
-  "“{n}” — vào check-in liền nha, em chờ nè! 💨",
+  "“{n}” — vào check-in liền nha, {me} chờ nè! 💨",
   "Mục tiêu mới “{n}” vừa tới, {u} xem thử nha! 👀",
 ];
-const NEW_TASK_BODY_MANY = ["{n} — {u} vào xem liền nha, em chờ nè! 💨"];
+const NEW_TASK_BODY_MANY = ["{n} — {u} vào xem liền nha, {me} chờ nè! 💨"];
 const TEST_BODIES = [
   "{a} thử loa nè! Nếu {u} nghe được âm thanh này là mọi thứ ổn rồi nha 💖",
-  "Alo alo, em nghe rõ không {u} ơi? Có tiếng là ổn áp rồi đó! 🎶",
+  "Alo alo, {me} nghe rõ không {u} ơi? Có tiếng là ổn áp rồi đó! 🎶",
 ];
 
 const pickOne = (pool) => pool[Math.floor(Math.random() * pool.length)];
@@ -162,6 +174,8 @@ const fill = (tpl, address, vars = {}) => {
   return tpl
     .replace(/\{U\}/g, U)
     .replace(/\{u\}/g, address)
+    .replace(/\{Me\}/g, agentVoice.me.charAt(0).toUpperCase() + agentVoice.me.slice(1))
+    .replace(/\{me\}/g, agentVoice.me)
     .replace(/\{a\}/g, agentName)
     .replace(/\{(\w+)\}/g, (m, k) => (vars[k] !== undefined ? String(vars[k]) : m));
 };
@@ -329,12 +343,12 @@ export function syncWaterReminders(times, enabled, soundName) {
       });
       if (!enabled || !times?.length) return;
 
-      const address = await getAddress();
+      const address = await getUserCall();
       const extras = await visualExtras();
       // Câu chữ được chọn NGẪU NHIÊN mỗi lần đặt lịch (mở app / đổi giờ / đổi theme); các giờ khác nhau
       // trong cùng lượt không trùng câu. Vì nhắc lặp mỗi ngày nên câu giữ nguyên tới lần đặt lịch kế tiếp.
-      const nextTitle = makeDeck(WATER_TITLES);
-      const nextBody = makeDeck(WATER_BODIES);
+      const nextTitle = makeDeck(pool("waterTitles", WATER_TITLES));
+      const nextBody = makeDeck(pool("waterBodies", WATER_BODIES));
 
       for (const timeStr of times) {
         const [hour, minute] = timeStr.split(":").map(Number);
@@ -373,13 +387,13 @@ export function syncTaskReminders({ tasks, times, enabled }) {
       const now = Date.now();
       const sorted = [...times].sort();
       let count = 0;
-      const address = await getAddress();
+      const address = await getUserCall();
       const extras = await visualExtras();
-      const nextTitle = makeDeck(TASK_TITLES);
-      const nextTodayOne = makeDeck(TASK_TODAY_ONE);
-      const nextTodayMany = makeDeck(TASK_TODAY_MANY);
-      const nextNextOne = makeDeck(TASK_NEXT_ONE);
-      const nextNextMany = makeDeck(TASK_NEXT_MANY);
+      const nextTitle = makeDeck(pool("taskTitles", TASK_TITLES));
+      const nextTodayOne = makeDeck(pool("taskTodayOne", TASK_TODAY_ONE));
+      const nextTodayMany = makeDeck(pool("taskTodayMany", TASK_TODAY_MANY));
+      const nextNextOne = makeDeck(pool("taskNextOne", TASK_NEXT_ONE));
+      const nextNextMany = makeDeck(pool("taskNextMany", TASK_NEXT_MANY));
 
       for (let d = 0; d < TASK_HORIZON_DAYS; d++) {
         // Hôm nay: chỉ task chưa xong. Các ngày sau: tất cả (ngày mới sẽ reset tiến độ).
@@ -459,14 +473,14 @@ export function notifyNewTasks(tasks, { userKey, enabled }) {
       const fresh = tasks.filter((t) => !known.has(String(t.id)));
       if (!fresh.length || !enabled) return fresh.length;
 
-      const address = await getAddress();
+      const address = await getUserCall();
       const extras = await visualExtras();
       const one = fresh.length === 1;
       const vars = { n: one ? fresh[0].title : names(fresh), c: fresh.length };
       await scheduleSafe({
         content: {
-          title: fill(pickOne(one ? NEW_TASK_TITLE_ONE : NEW_TASK_TITLE_MANY), address, vars),
-          body: fill(pickOne(one ? NEW_TASK_BODY_ONE : NEW_TASK_BODY_MANY), address, vars),
+          title: fill(pickOne(one ? pool("newTaskTitleOne", NEW_TASK_TITLE_ONE) : pool("newTaskTitleMany", NEW_TASK_TITLE_MANY)), address, vars),
+          body: fill(pickOne(one ? pool("newTaskBodyOne", NEW_TASK_BODY_ONE) : pool("newTaskBodyMany", NEW_TASK_BODY_MANY)), address, vars),
           sound: "default",
           data: { kind: "new_task", task_ids: fresh.map((t) => t.id) },
           ...androidExtras,
@@ -485,12 +499,12 @@ export function notifyNewTasks(tasks, { userKey, enabled }) {
 // ─── Thông báo thử ──────────────────────────────────────────────────────────
 export async function sendTestNotification(soundName) {
   try {
-    const address = await getAddress();
+    const address = await getUserCall();
     const extras = await visualExtras();
     await scheduleSafe({
       content: {
         title: "Thông báo thử 🔔",
-        body: fill(pickOne(TEST_BODIES), address),
+        body: fill(pickOne(pool("testBodies", TEST_BODIES)), address),
         sound: soundFor(soundName),
         data: { kind: "test" },
         ...androidExtras,

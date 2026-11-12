@@ -44,7 +44,7 @@ export const AI_THEMES = {
   // Sau này thêm theme mới: copy 1 khối ở trên, đổi key / label / scale / đường dẫn ảnh.
 };
 
-export const DEFAULT_AI_THEME = "ai-avata";
+export const DEFAULT_AI_THEME = "whale-avata";
 
 // Lấy ảnh theo theme + accent; thiếu ảnh -> tấm mặc định (ocean) -> tấm đầu tiên có trong theme
 export const getAiAvatar = (themeKey, accentKey) => {
