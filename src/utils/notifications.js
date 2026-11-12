@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Asset } from "expo-asset";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
-import { getAgentName } from "../context/aiAgents";
+import { getAgentName, getAppLogo } from "../context/aiAgents";
 import { DEFAULT_AI_THEME, AI_THEMES, getAiAvatar } from "../context/aiThemes";
 import { ACCENTS } from "../context/ThemeContext";
 
@@ -171,11 +171,18 @@ const fill = (tpl, address, vars = {}) => {
 // Android: expo-notifications không cho đổi ảnh lớn theo từng thông báo (ảnh nhỏ/lớn do plugin gắn lúc build),
 // nên đổi MÀU nhấn của thông báo theo màu theme.
 // Ảnh lấy từ registry src/context/aiThemes.js: theo AI-theme đang chọn + màu accent (thiếu ảnh -> tấm mặc định).
+// Ảnh đính kèm thông báo (iOS):
+//   "app"   = HÌNH APP của agent đang chọn (AGENT_META[agent].appLogo trong aiAgents.js; chưa đặt thì dùng ảnh agent)
+//   "agent" = ẢNH AGENT (avatar theo màu chủ đạo, giống nút AI nổi)
+//   "none"  = KHÔNG đính ảnh (thông báo chỉ có icon app bên trái do hệ điều hành tự gắn)
+export const NOTIF_IMAGE = "none";
+const notifImage = (themeKey, key) => (NOTIF_IMAGE === "app" ? getAppLogo(themeKey, key) : getAiAvatar(themeKey, key));
+
 const avatarUriCache = {};
 function avatarUri(themeKey, key) {
-  const cacheKey = `${themeKey}:${key}`;
+  const cacheKey = `${NOTIF_IMAGE}:${themeKey}:${key}`;
   if (!avatarUriCache[cacheKey]) {
-    avatarUriCache[cacheKey] = Asset.fromModule(getAiAvatar(themeKey, key))
+    avatarUriCache[cacheKey] = Asset.fromModule(notifImage(themeKey, key))
       .downloadAsync()
       .then((a) => a.localUri || a.uri || null)
       .catch(() => null);
@@ -189,6 +196,7 @@ function avatarUri(themeKey, key) {
 async function visualExtras() {
   const key = ACCENTS[accentKey] ? accentKey : "ocean";
   if (IS_ANDROID) return { color: ACCENTS[key]?.primary };
+  if (NOTIF_IMAGE === "none") return {}; // iOS: bỏ ảnh đính kèm bên phải thông báo
   const uri = await avatarUri(aiThemeKey, key);
   return uri
     ? {

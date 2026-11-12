@@ -108,9 +108,13 @@ export const useAiAgent = () => {
 };
 
 // Hook: ảnh LOGO của app theo agent (ưu tiên appLogo riêng, không có thì dùng avatar theo màu chủ đạo)
+// Bản không phải hook (dùng được ở utils/notifications.js)
+export const getAppLogo = (themeKey, accentKey) =>
+  AGENT_META[themeKey]?.appLogo || getAiAvatar(themeKey, accentKey);
+
 export const useAppLogo = () => {
   const { aiThemeKey, accentKey } = useTheme();
-  return AGENT_META[aiThemeKey]?.appLogo || getAiAvatar(aiThemeKey, accentKey);
+  return getAppLogo(aiThemeKey, accentKey);
 };
 
 // Hook: ảnh NỀN của app theo agent (null nếu agent không có ảnh nền)
