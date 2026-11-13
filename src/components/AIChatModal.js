@@ -15,6 +15,7 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   PanResponder,
   Platform,
   ScrollView,
@@ -130,6 +131,10 @@ const MONO = Platform.OS === "ios" ? "Menlo" : "monospace";
 const TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
 const splitCells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 
+const HR = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
+const SRC = /^\s*\**Nguồn(?:\s+tham\s+khảo)?\**\s*:/i;
+const indentLvl = (s) => Math.min(2, Math.ceil(s.replace(/\t/g, "  ").length / 4)); // 2–4 khoảng trắng = cấp 1, 5+ = cấp 2
+
 const parseBlocks = (src) => {
   const lines = String(src || "").replace(/\r/g, "").split("\n");
   const out = [];
@@ -137,11 +142,12 @@ const parseBlocks = (src) => {
   while (i < lines.length) {
     const line = lines[i];
     if (/^```/.test(line.trim())) {
+      const lang = line.trim().replace(/^`+/, "").trim().split(/\s+/)[0] || "";
       const code = [];
       i++;
       while (i < lines.length && !/^```/.test(lines[i].trim())) code.push(lines[i++]);
       i++;
-      out.push({ t: "code", text: code.join("\n") });
+      out.push({ t: "code", text: code.join("\n"), lang });
       continue;
     }
     if (!line.trim()) {
@@ -157,21 +163,57 @@ const parseBlocks = (src) => {
     }
     let m;
     if ((m = line.match(/^\s{0,3}(#{1,4})\s+(.*)$/))) out.push({ t: "h", text: m[2], lvl: m[1].length });
-    else if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) out.push({ t: "li", text: m[1], mark: "•" });
-    else if ((m = line.match(/^\s*(\d+)[.)]\s+(.*)$/))) out.push({ t: "li", text: m[2], mark: `${m[1]}.` });
+    else if (HR.test(line)) out.push({ t: "hr" });
+    else if ((m = line.match(/^(\s*)[-*•]\s+(.*)$/))) {
+      const lvl = indentLvl(m[1]);
+      out.push({ t: "li", text: m[2], lvl, mark: lvl ? "◦" : "•" });
+    } else if ((m = line.match(/^(\s*)(\d+)[.)]\s+(.*)$/))) out.push({ t: "li", text: m[3], lvl: indentLvl(m[1]), mark: `${m[2]}.` });
     else if ((m = line.match(/^>\s?(.*)$/))) out.push({ t: "quote", text: m[1] });
+    else if (SRC.test(line)) out.push({ t: "src", text: line.trim().replace(/\*\*/g, "") });
     else out.push({ t: "p", text: line });
     i++;
   }
   return out;
 };
 
+const openLink = async (url) => {
+  try {
+    if (!/^https?:\/\//i.test(url)) return; // chỉ mở http/https
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert("Không mở được liên kết", url);
+  }
+};
+
+// [chữ](https://...) | URL trần | **đậm** | `code` | *nghiêng*
+const INLINE_SPLIT = /(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s<>)\]]+|\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
+const MD_LINK = /^\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)$/;
+
 const Inline = ({ text, style, colors }) => (
   <Text style={style} selectable>
-    {text.split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g).map((p, i) => {
+    {text.split(INLINE_SPLIT).map((p, i) => {
       if (!p) return null;
+      const lm = p.match(MD_LINK);
+      if (lm)
+        return (
+          <Text key={i} onPress={() => openLink(lm[2])} style={[styles.link, { color: colors.primary }]}>
+            {lm[1]}
+          </Text>
+        );
+      if (/^https?:\/\//i.test(p)) {
+        const url = p.replace(/[.,;:!?]+$/, ""); // bỏ dấu câu dính cuối URL
+        const tail = p.slice(url.length);
+        return (
+          <Text key={i}>
+            <Text onPress={() => openLink(url)} style={[styles.link, { color: colors.primary }]}>
+              {url}
+            </Text>
+            {tail}
+          </Text>
+        );
+      }
       if (p.length > 4 && p.startsWith("**") && p.endsWith("**"))
-        return <Text key={i} style={{ fontWeight: "800" }}>{p.slice(2, -2)}</Text>;
+        return <Text key={i} style={{ fontWeight: "800", color: colors.primary }}>{p.slice(2, -2)}</Text>;
       if (p.length > 2 && p.startsWith("`") && p.endsWith("`"))
         return (
           <Text key={i} style={[styles.inlineCode, { backgroundColor: colors.primarySoft, color: colors.primaryText }]}>
@@ -191,19 +233,27 @@ const RichText = memo(function RichText({ content, colors }) {
   return (
     <View>
       {blocks.map((b, i) => {
-        const gap = i === 0 ? 0 : b.t === "li" ? 3 : 8;
-        if (b.t === "code") return <CodeBlock key={i} text={b.text} colors={colors} gap={gap} />;
+        const prev = blocks[i - 1];
+        // khoảng cách thoáng: giữa các mục list 6, list <-> đoạn văn 12, giữa các đoạn 10
+        const gap = i === 0 ? 0 : b.t === "li" ? (prev?.t === "li" ? 6 : 8) : prev?.t === "li" ? 12 : 10;
+        if (b.t === "code") return <CodeBlock key={i} text={b.text} lang={b.lang} colors={colors} gap={gap} />;
         if (b.t === "table") return <TableView key={i} rows={b.rows} colors={colors} gap={gap} />;
+        if (b.t === "hr")
+          return <View key={i} style={{ height: 1, marginTop: gap + 4, marginBottom: 2, backgroundColor: colors.border }} />;
         if (b.t === "h")
           return (
-            <View key={i} style={{ marginTop: gap + 2 }}>
-              <Inline text={b.text} colors={colors} style={[base, { fontWeight: "800", fontSize: b.lvl === 1 ? 18 : b.lvl === 2 ? 16.5 : 15.5, lineHeight: 24 }]} />
+            <View key={i} style={{ marginTop: i === 0 ? 0 : gap + 4 }}>
+              <Inline
+                text={b.text}
+                colors={colors}
+                style={[base, { fontWeight: "800", color: colors.primary, fontSize: b.lvl === 1 ? 18 : b.lvl === 2 ? 16.5 : 15.5, lineHeight: 24 }]}
+              />
             </View>
           );
         if (b.t === "li")
           return (
-            <View key={i} style={[styles.liRow, { marginTop: gap }]}>
-              <Text style={[base, styles.liMark, { color: colors.primary }]}>{b.mark}</Text>
+            <View key={i} style={[styles.liRow, { marginTop: gap, marginLeft: b.lvl * 18 }]}>
+              <Text style={[base, styles.liMark, { color: colors.primary, width: /^\d/.test(b.mark) ? 26 : 18 }]}>{b.mark}</Text>
               <View style={{ flex: 1 }}>
                 <Inline text={b.text} colors={colors} style={base} />
               </View>
@@ -211,8 +261,17 @@ const RichText = memo(function RichText({ content, colors }) {
           );
         if (b.t === "quote")
           return (
-            <View key={i} style={[styles.quote, { marginTop: gap, borderLeftColor: colors.primary }]}>
-              <Inline text={b.text} colors={colors} style={[base, { color: colors.textMuted }]} />
+            <View key={i} style={[styles.quote, { marginTop: gap, borderLeftColor: colors.primary, backgroundColor: colors.primarySoft }]}>
+              <Inline text={b.text} colors={colors} style={[base, { color: colors.primaryText }]} />
+            </View>
+          );
+        if (b.t === "src")
+          return (
+            <View key={i} style={{ marginTop: gap + 2, flexDirection: "row", alignItems: "flex-start" }}>
+              <Ionicons name="globe-outline" size={14} color={colors.textMuted} style={{ marginTop: 3, marginRight: 6 }} />
+              <View style={{ flex: 1 }}>
+                <Inline text={b.text} colors={colors} style={[base, { fontSize: 12.5, lineHeight: 18, color: colors.textMuted }]} />
+              </View>
             </View>
           );
         return (
@@ -225,12 +284,12 @@ const RichText = memo(function RichText({ content, colors }) {
   );
 });
 
-const CodeBlock = memo(function CodeBlock({ text, colors, gap }) {
+const CodeBlock = memo(function CodeBlock({ text, lang, colors, gap }) {
   const [ok, setOk] = useState(false);
   return (
     <View style={[styles.codeBlock, { marginTop: gap, backgroundColor: colors.background, borderColor: colors.border }]}>
       <View style={styles.codeHead}>
-        <Text style={{ color: colors.textMuted, fontSize: 11.5, fontWeight: "700" }}>Code</Text>
+        <Text style={{ color: colors.textMuted, fontSize: 11.5, fontWeight: "700" }}>{lang || "Code"}</Text>
         <TouchableOpacity
           hitSlop={8}
           onPress={async () => {
@@ -1069,6 +1128,7 @@ const AIChatModal = memo(function AIChatModal({
           content: data.reply,
           note,
           fresh: true,
+          searched: !!data.searched,
           appealCard: ap?.status === "approved",
           appealId: ap?.id,
         },
@@ -1218,6 +1278,12 @@ const AIChatModal = memo(function AIChatModal({
                     onDone={() => markDone(item.id)}
                   />
                 ))}
+              {!!item.searched && (
+                <View style={styles.searchedRow}>
+                  <Ionicons name="globe-outline" size={13} color={colors.primary} />
+                  <Text style={[styles.searchedText, { color: colors.textMuted }]}>Đã tra cứu web</Text>
+                </View>
+              )}
               {!!item.note && (
                 <View style={[styles.noteBox, { backgroundColor: colors.primarySoft }]}>
                   <Text style={[styles.noteText, { color: colors.primaryText }]}>{item.note}</Text>
@@ -1916,7 +1982,10 @@ const styles = StyleSheet.create({
   codeText: { fontFamily: MONO, fontSize: 12.5, lineHeight: 18 },
   liRow: { flexDirection: "row", alignItems: "flex-start" },
   liMark: { width: 20, fontWeight: "800" },
-  quote: { borderLeftWidth: 3, paddingLeft: 10 },
+  quote: { borderLeftWidth: 3, paddingLeft: 10, paddingRight: 10, paddingVertical: 8, borderRadius: 10 },
+  link: { fontWeight: "600", textDecorationLine: "underline" },
+  searchedRow: { flexDirection: "row", alignItems: "center", marginTop: 8 },
+  searchedText: { fontSize: 12, fontWeight: "600", marginLeft: 5 },
   thinkDot: { width: 7, height: 7, borderRadius: 4, marginHorizontal: 2.5 },
   errHead: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
   errHeadText: { color: "#ef4444", fontSize: 12.5, fontWeight: "800", marginLeft: 5 },

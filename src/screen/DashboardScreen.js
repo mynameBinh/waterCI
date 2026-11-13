@@ -1658,7 +1658,7 @@ export default function DashboardScreen({ token, onLogout }) {
             icon="checkmark-circle-outline"
             activeIcon="checkmark-circle"
             label="Mục tiêu"
-            activeColor="#8b5cf6"
+            activeColor={colors.primary}
             colors={colors}
             compact={isCompactWidth}
           />
@@ -1670,7 +1670,7 @@ export default function DashboardScreen({ token, onLogout }) {
               icon="eye-outline"
               activeIcon="eye"
               label="Theo dõi"
-              activeColor="#10b981"
+              activeColor={colors.primary}
               colors={colors}
               compact={isCompactWidth}
             />
@@ -1683,7 +1683,7 @@ export default function DashboardScreen({ token, onLogout }) {
               icon="gift-outline"
               activeIcon="gift"
               label="Quà tặng"
-              activeColor="#f43f5e"
+              activeColor={colors.primary}
               colors={colors}
               compact={isCompactWidth}
             />

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Whale Check-In",
     "slug": "MyFirstApp",
-    "version": "2.3.3",
+    "version": "2.3.4",
     "orientation": "portrait",
     "icon": "./assets/avata/whale-avata/app-whale.png",
     "scheme": "myfirstapp",
@@ -33,9 +33,13 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/avata/whale-avata/app-whale.png",
-          "imageWidth": 76
+          "backgroundColor": "#f8f7f6",
+          "image": "./assets/splash-text.png",
+          "imageWidth": 240,
+          "dark": {
+            "backgroundColor": "#131214",
+            "image": "./assets/splash-text-dark.png"
+          }
         }
       ],
       "expo-secure-store",
