@@ -135,19 +135,48 @@ const HR = /^\s*([-*_])(?:\s*\1){2,}\s*$/;
 const SRC = /^\s*\**Nguồn(?:\s+tham\s+khảo)?\**\s*:/i;
 const indentLvl = (s) => Math.min(2, Math.ceil(s.replace(/\t/g, "  ").length / 4)); // 2–4 khoảng trắng = cấp 1, 5+ = cấp 2
 
+// Đọc 1 khối code mở ở dòng i. Trả { block, next } hoặc null nếu dòng i không mở khối code.
+//  • Dòng đóng phải CHỈ gồm dấu fence (>= độ dài fence mở) -> fence lồng nhau / dòng "```js" bên trong code không đóng nhầm.
+//  • ```code``` đóng ngay trên cùng 1 dòng -> khối 1 dòng (nếu còn chữ phía sau thì là đoạn văn + code nội tuyến); KHÔNG nuốt phần còn lại của tin nhắn.
+//  • Thụt lề của dòng mở fence (vd code nằm trong mục danh sách) được bỏ khỏi các dòng code.
+const readFence = (lines, i) => {
+  const fm = lines[i].match(/^(\s*)(`{3,}|~{3,})(.*)$/);
+  if (!fm) return null;
+  const [, ind, fence, rest] = fm;
+  const ch = fence[0];
+  if (ch === "`") {
+    const closeAt = rest.indexOf(fence);
+    if (closeAt >= 0) {
+      // còn chữ sau fence đóng -> đây là đoạn văn có code nội tuyến (Inline lo), không biến cả dòng thành khối code
+      if (rest.slice(closeAt + fence.length).trim()) return null;
+      return { block: { t: "code", text: rest.slice(0, closeAt).trim(), lang: "" }, next: i + 1 };
+    }
+    if (rest.includes("`")) return null; // info string của fence ``` không chứa dấu ` -> đây là code nội tuyến
+  }
+  const lang = rest.trim().split(/\s+/)[0] || "";
+  const closeRe = new RegExp(`^\\s*${ch}{${fence.length},}\\s*$`);
+  const cutRe = ind.length ? new RegExp(`^ {0,${ind.length}}`) : null;
+  const code = [];
+  let j = i + 1;
+  while (j < lines.length && !closeRe.test(lines[j])) {
+    code.push(cutRe ? lines[j].replace(cutRe, "") : lines[j]);
+    j++;
+  }
+  while (code.length && !code[code.length - 1].trim()) code.pop(); // bỏ dòng trống đầu / cuối khối
+  while (code.length && !code[0].trim()) code.shift();
+  return { block: { t: "code", text: code.join("\n"), lang }, next: j + 1 };
+};
+
 const parseBlocks = (src) => {
   const lines = String(src || "").replace(/\r/g, "").split("\n");
   const out = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    if (/^```/.test(line.trim())) {
-      const lang = line.trim().replace(/^`+/, "").trim().split(/\s+/)[0] || "";
-      const code = [];
-      i++;
-      while (i < lines.length && !/^```/.test(lines[i].trim())) code.push(lines[i++]);
-      i++;
-      out.push({ t: "code", text: code.join("\n"), lang });
+    const fence = readFence(lines, i);
+    if (fence) {
+      out.push(fence.block);
+      i = fence.next;
       continue;
     }
     if (!line.trim()) {
@@ -186,7 +215,7 @@ const openLink = async (url) => {
 };
 
 // [chữ](https://...) | URL trần | **đậm** | `code` | *nghiêng*
-const INLINE_SPLIT = /(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s<>)\]]+|\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
+const INLINE_SPLIT = /(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|https?:\/\/[^\s<>)\]]+|\*\*[^*]+\*\*|`{1,3}[^`\n]+`{1,3}|\*[^*\s][^*]*\*)/g;
 const MD_LINK = /^\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)$/;
 
 const Inline = ({ text, style, colors }) => (
@@ -217,7 +246,7 @@ const Inline = ({ text, style, colors }) => (
       if (p.length > 2 && p.startsWith("`") && p.endsWith("`"))
         return (
           <Text key={i} style={[styles.inlineCode, { backgroundColor: colors.primarySoft, color: colors.primaryText }]}>
-            {p.slice(1, -1)}
+            {p.replace(/^`+|`+$/g, "")}
           </Text>
         );
       if (p.length > 2 && p.startsWith("*") && p.endsWith("*"))
@@ -284,12 +313,43 @@ const RichText = memo(function RichText({ content, colors }) {
   );
 });
 
+// ── Khối code: KHÔNG để 1 khối chiếm hết màn hình / làm native Text quá lớn ──
+const CODE_COLLAPSE_LINES = 20; // dài hơn mức này -> mặc định thu gọn
+const CODE_PREVIEW_LINES = 12; // số dòng hiện khi thu gọn
+const CODE_CHUNK_LINES = 40; // mỗi <Text> tối đa ngần này dòng (Text native quá cao dễ bị cắt / trắng trên Android)
+const CODE_MAX_LINE = 220; // dòng dài hơn mức này được ngắt khi HIỂN THỊ (nút Sao chép vẫn chép bản gốc)
+
+const prepCode = (text) => {
+  const out = [];
+  String(text || "")
+    .replace(/\t/g, "  ")
+    .split("\n")
+    .forEach((l) => {
+      const line = l.replace(/\s+$/, "");
+      if (line.length <= CODE_MAX_LINE) out.push(line);
+      else for (let k = 0; k < line.length; k += CODE_MAX_LINE) out.push((k ? "↪ " : "") + line.slice(k, k + CODE_MAX_LINE));
+    });
+  return out;
+};
+
 const CodeBlock = memo(function CodeBlock({ text, lang, colors, gap }) {
   const [ok, setOk] = useState(false);
+  const [open, setOpen] = useState(false);
+  const lines = useMemo(() => prepCode(text), [text]);
+  const long = lines.length > CODE_COLLAPSE_LINES;
+  const chunks = useMemo(() => {
+    const src = long && !open ? lines.slice(0, CODE_PREVIEW_LINES) : lines;
+    const c = [];
+    for (let k = 0; k < src.length; k += CODE_CHUNK_LINES) c.push(src.slice(k, k + CODE_CHUNK_LINES).join("\n"));
+    return c.length ? c : [""];
+  }, [lines, long, open]);
   return (
     <View style={[styles.codeBlock, { marginTop: gap, backgroundColor: colors.background, borderColor: colors.border }]}>
       <View style={styles.codeHead}>
-        <Text style={{ color: colors.textMuted, fontSize: 11.5, fontWeight: "700" }}>{lang || "Code"}</Text>
+        <Text numberOfLines={1} style={{ color: colors.textMuted, fontSize: 11.5, fontWeight: "700", flexShrink: 1, marginRight: 8 }}>
+          {lang || "Code"}
+          {long ? ` · ${lines.length} dòng` : ""}
+        </Text>
         <TouchableOpacity
           hitSlop={8}
           onPress={async () => {
@@ -307,11 +367,92 @@ const CodeBlock = memo(function CodeBlock({ text, lang, colors, gap }) {
         </TouchableOpacity>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} nestedScrollEnabled>
-        <Text selectable style={[styles.codeText, { color: colors.text }]}>{text}</Text>
+        <View>
+          {chunks.map((c, k) => (
+            <Text key={k} selectable style={[styles.codeText, { color: colors.text }]}>
+              {c}
+            </Text>
+          ))}
+        </View>
       </ScrollView>
+      {long && (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() => setOpen((v) => !v)}
+          style={[styles.codeMore, { borderTopColor: colors.border }]}
+          accessibilityRole="button"
+        >
+          <Ionicons name={open ? "chevron-up" : "chevron-down"} size={14} color={colors.primary} />
+          <Text style={{ color: colors.primary, fontSize: 12, fontWeight: "700", marginLeft: 4 }}>
+            {open ? "Thu gọn" : `Xem thêm ${lines.length - CODE_PREVIEW_LINES} dòng`}
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 });
+
+// ── Tin nhắn của NGƯỜI DÙNG có code: tách khối ``` thành CodeBlock; dán code trần (không ```) cũng nhận ra ──
+const CODE_LINE =
+  /[{};]\s*$|^\s{2,}\S|^\s*(?:\/\/|#include\b|import\s|from\s+\S+\s+import\b|def\s|class\s|function\b|const\s|let\s|var\s|return\b|elif\b|else\s*:|(?:SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|CREATE|ALTER|JOIN|GROUP BY|ORDER BY)\b|<\/?[A-Za-z][^>]*>\s*$)|=>|\w\(.*\)\s*:?\s*$|^\s*[\w.[\]]+\s*[-+*/]?=\s*\S/;
+
+// [{ t: "text", text } | { t: "code", text, lang }]
+const splitUserCode = (src) => {
+  const lines = String(src || "").replace(/\r/g, "").split("\n");
+  const out = [];
+  let buf = [];
+  const flush = () => {
+    const t = buf.join("\n").replace(/^\n+|\s+$/g, "");
+    if (t) out.push({ t: "text", text: t });
+    buf = [];
+  };
+  let hasFence = false;
+  for (let i = 0; i < lines.length; ) {
+    const f = readFence(lines, i);
+    if (f) {
+      hasFence = true;
+      flush();
+      out.push(f.block);
+      i = f.next;
+    } else buf.push(lines[i++]);
+  }
+  flush();
+  if (hasFence) return out;
+
+  // không có ``` : dán code trần? (>= 3 dòng có nội dung và >= 60% giống code)
+  const hit = lines.map((l) => !!l.trim() && CODE_LINE.test(l));
+  const nonEmpty = lines.filter((l) => l.trim()).length;
+  if (nonEmpty < 3 || hit.filter(Boolean).length / nonEmpty < 0.6) return [{ t: "text", text: String(src || "") }];
+  const first = hit.indexOf(true);
+  const last = hit.lastIndexOf(true);
+  const res = [];
+  const head = lines.slice(0, first).join("\n").trim();
+  const tail = lines.slice(last + 1).join("\n").trim();
+  if (head) res.push({ t: "text", text: head });
+  res.push({ t: "code", text: lines.slice(first, last + 1).join("\n"), lang: "" });
+  if (tail) res.push({ t: "text", text: tail });
+  return res;
+};
+
+const UserBody = memo(function UserBody({ content, colors }) {
+  const blocks = useMemo(() => splitUserCode(content), [content]);
+  return (
+    <View>
+      {blocks.map((b, i) =>
+        b.t === "code" ? (
+          <CodeBlock key={i} text={b.text} lang={b.lang} colors={colors} gap={i ? 8 : 0} />
+        ) : (
+          <Text key={i} selectable style={[styles.bubbleText, { color: "#ffffff", marginTop: i ? 8 : 0 }]}>
+            {b.text}
+          </Text>
+        ),
+      )}
+    </View>
+  );
+});
+
+// Tin nhắn có khối code / bảng cần bong bóng RỘNG CỐ ĐỊNH để cuộn ngang hoạt động (xem renderItem)
+const WIDE_CONTENT = /(^|\n)[ \t]*(`{3,}|~{3,})|(^|\n)[ \t]*\|.*\|[ \t]*(\n|$)/;
 
 const TableView = memo(function TableView({ rows, colors, gap }) {
   const cols = Math.max(1, ...rows.map((r) => r.length));
@@ -567,6 +708,12 @@ const AIChatModal = memo(function AIChatModal({
   const [copyOpen, setCopyOpen] = useState(false);
   const [camOpen, setCamOpen] = useState(false); // khung camera check-in (dùng chung với màn hình chính)
   const { width: winW, height: winH } = useWindowDimensions();
+  // Bề rộng THẬT của danh sách tin nhắn (onLayout). Bong bóng cần bề rộng px xác định (không dùng %) thì khối code / bảng
+  // mới bị giới hạn đúng và cuộn ngang được, thay vì kéo bong bóng rộng quá màn hình và che avatar + các phần khác.
+  const [listW, setListW] = useState(0);
+  const contentW = Math.max(200, Math.round((listW || winW) - 32)); // trừ padding 16 hai bên của listContent
+  const aiColMax = Math.max(160, Math.min(contentW - 36, Math.floor(contentW * 0.94))); // 36 = avatar 28 + lề 8
+  const myColMax = Math.floor(contentW * 0.82);
   const [focused, setFocused] = useState(false);
   const atBottomRef = useRef(true);
   const [copiedId, setCopiedId] = useState(null); // hiện dấu ✓ sau khi bấm "Sao chép"
@@ -643,7 +790,7 @@ const AIChatModal = memo(function AIChatModal({
         note:
           appeal.status === "approved"
             ? "✅ Em đã duyệt roi đó, bấm nút chọn ml dưới để check bù nhé."
-            : "💛 Lý do gì nè, kể em nghe.",
+            : "💛 Lý do gì nè, kể tớ nghe.",
         appealCard: appeal.status === "approved",
         appealId: appeal.id,
       },
@@ -1183,6 +1330,8 @@ const AIChatModal = memo(function AIChatModal({
       const next = messages[index + 1];
       const firstOfGroup = !prev || prev.role !== item.role;
       const lastOfGroup = !next || next.role !== item.role;
+      const colMax = mine ? myColMax : aiColMax;
+      const wide = !!item.content && !item.isError && (WIDE_CONTENT.test(item.content) || (mine && splitUserCode(item.content).some((b) => b.t === "code")));
       const nextQs =
         !mine && !item.isError && !item.fresh && index === messages.length - 1 && !sending && item.content
           ? parseReply(item.content).next
@@ -1201,11 +1350,12 @@ const AIChatModal = memo(function AIChatModal({
             ) : (
               <View style={styles.msgAvatarSpacer} />
             ))}
-          <View style={[styles.msgCol, { alignItems: mine ? "flex-end" : "flex-start", maxWidth: mine ? "82%" : "92%" }]}>
+          <View style={[styles.msgCol, { alignItems: mine ? "flex-end" : "flex-start", maxWidth: colMax }]}>
             <View
               style={[
                 styles.bubble,
-                { maxWidth: "100%" },
+                { maxWidth: colMax },
+                wide && { width: colMax },
                 mine
                   ? [
                       { backgroundColor: colors.primary },
@@ -1259,7 +1409,9 @@ const AIChatModal = memo(function AIChatModal({
                 </View>
               )}
               {!!item.content &&
-                (mine || item.isError ? (
+                (mine && !item.isError ? (
+                  <UserBody content={item.content} colors={colors} />
+                ) : item.isError ? (
                   <Text
                     selectable
                     style={[
@@ -1365,7 +1517,7 @@ const AIChatModal = memo(function AIChatModal({
         </View>
       );
     },
-    [colors, avatar, avatarStyle, copiedId, quickCopy, messages, sending, send, exportCtx, markDone, appeal, onAppealApproved],
+    [colors, avatar, avatarStyle, copiedId, quickCopy, messages, sending, send, exportCtx, markDone, appeal, onAppealApproved, aiColMax, myColMax],
   );
 
   const empty = (
@@ -1501,6 +1653,10 @@ const AIChatModal = memo(function AIChatModal({
         {/* Danh sách tin nhắn */}
         <FlatList
           ref={listRef}
+          onLayout={(e) => {
+            const w = Math.round(e.nativeEvent.layout.width);
+            setListW((p) => (p === w ? p : w));
+          }}
           data={messages}
           keyExtractor={(m) => m.id}
           renderItem={renderItem}
@@ -1978,8 +2134,9 @@ const styles = StyleSheet.create({
   },
   bubbleText: { fontSize: 15, lineHeight: 22 },
   inlineCode: { fontFamily: MONO, fontSize: 13.5 },
-  codeBlock: { borderWidth: 1, borderRadius: 12, padding: 10 },
-  codeText: { fontFamily: MONO, fontSize: 12.5, lineHeight: 18 },
+  codeBlock: { borderWidth: 1, borderRadius: 12, padding: 10, alignSelf: "stretch", overflow: "hidden" },
+  codeText: { fontFamily: MONO, fontSize: 12.5, lineHeight: 18, flexShrink: 0, alignSelf: "flex-start" },
+  codeMore: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 8, paddingTop: 8, borderTopWidth: StyleSheet.hairlineWidth },
   liRow: { flexDirection: "row", alignItems: "flex-start" },
   liMark: { width: 20, fontWeight: "800" },
   quote: { borderLeftWidth: 3, paddingLeft: 10, paddingRight: 10, paddingVertical: 8, borderRadius: 10 },

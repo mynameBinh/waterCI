@@ -884,7 +884,7 @@ export default function DashboardScreen({ token, onLogout }) {
     }
   }, [token, authFetch, fetchStreak]);
 
-  // ── Camera / AI ───────────────────────────────────────────────────────────
+  //  Camera / AI 
   const handleActivationCamera = useCallback(async () => {
     cameraModeRef.current = "water";
     const { status } = await Camera.requestCameraPermissionsAsync();
