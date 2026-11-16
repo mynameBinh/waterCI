@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../context/ThemeContext";
 
 // ── Bottom sheet dùng chung (ChatPlusSheet, SmartCopySheet...) ───────────────
-//  • Bấm ra ngoài (vùng tối) là đóng NGAY – không cần bấm "Xong".
+//  • Bấm BẤT KỲ chỗ nào ngoài bảng (vùng tối) là đóng NGAY – không cần bấm "Xong" hay vuốt.
 //  • Vuốt xuống ở tay nắm / tiêu đề để đóng, thả nhẹ thì bật lại.
 //  • Có animation thoát (parent chỉ cần đặt visible=false, sheet tự trượt xuống rồi mới gỡ).
 //  • Dùng <Modal> gốc -> luôn nằm trên cùng, nhận chạm đúng, Android back chạy qua onRequestClose.
@@ -103,11 +103,19 @@ const BottomSheet = memo(function BottomSheet({
       supportedOrientations={["portrait", "landscape"]}
     >
       <View style={styles.root}>
+        {/* Lớp tối chỉ để nhìn (không nhận chạm). */}
         <Animated.View
+          pointerEvents="none"
           style={[styles.backdrop, { opacity: open.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) }]}
-        >
-          <Pressable style={StyleSheet.absoluteFill} onPress={requestClose} accessibilityLabel="Đóng" />
-        </Animated.View>
+        />
+        {/* Vùng bấm-ra-ngoài tách riêng: View thường, phủ kín màn hình, nằm DƯỚI bảng (bảng vẽ sau nên nhận chạm trước).
+            Không lồng trong view đang chạy animation nên không bị nuốt chạm. */}
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={requestClose}
+          accessibilityRole="button"
+          accessibilityLabel="Đóng"
+        />
 
         <Animated.View
           style={[

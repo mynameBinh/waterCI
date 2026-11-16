@@ -16,6 +16,7 @@ const ChatPlusSheet = memo(function ChatPlusSheet({
   prefs,
   onChangePrefs,
   onPickFile,
+  onOpenGoogle, // mở màn "Tài khoản Google" (AIChatModal truyền vào)
   onClose,
   attachFull = false,
 }) {
@@ -67,12 +68,25 @@ const ChatPlusSheet = memo(function ChatPlusSheet({
           <Row
             icon="document-attach-outline"
             title="Tệp"
-            sub={attachFull ? "Đã đủ số tệp đính kèm" : "PDF, Word, văn bản"}
+            sub={attachFull ? "Đã đủ số tệp đính kèm" : "PDF, Word, Excel, văn bản"}
             onPress={onPickFile}
             disabled={attachFull}
             last
           />
         </Group>
+
+        {!!onOpenGoogle && (
+          <Group title="Tài khoản">
+            <Row
+              icon="logo-google"
+              title="Tài khoản Google"
+              sub="Lưu file vào Drive, đọc và sửa Docs / Sheets / Slides"
+              onPress={onOpenGoogle}
+              right={<Ionicons name="chevron-forward" size={18} color={colors.textMuted} />}
+              last
+            />
+          </Group>
+        )}
 
         <Group title="Công cụ">
           <Row
