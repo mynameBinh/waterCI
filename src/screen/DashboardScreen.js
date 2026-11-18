@@ -450,12 +450,27 @@ export default function DashboardScreen({ token, onLogout }) {
     if (token) refreshNotifVoice();
   }, [token, refreshNotifVoice]);
 
+  // Mục tiêu nước do backend quyết định (có thể đổi trong ngày) -> lấy lại mỗi khi quay lại app
+  const refreshGoal = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const me = await res.json();
+      if (typeof me?.daily_goal === "number") setGoalMl(me.daily_goal);
+    } catch {
+      /* offline: giữ nguyên mục tiêu hiện tại */
+    }
+  }, [token, authFetch]);
+
   // ── Quay lại app: tải lại task/streak (kéo theo làm mới widget), kiểm tra quyền ──
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
       fetchActiveTask();
       fetchStreak();
+      refreshGoal();
       getPermissionStatus().then(setPermissionStatus);
       refreshNotifVoice();
       // Đặt lại nhắc uống nước -> mỗi lần mở app AI có câu nhắc ngẫu nhiên mới
@@ -463,7 +478,7 @@ export default function DashboardScreen({ token, onLogout }) {
       if (cfg.push) syncWaterReminders(cfg.times, true, selectedSoundRef.current);
     });
     return () => sub.remove();
-  }, [fetchActiveTask, fetchStreak, refreshNotifVoice]);
+  }, [fetchActiveTask, fetchStreak, refreshGoal, refreshNotifVoice]);
 
   // ── Load dữ liệu ban đầu ─────────────────────────────────────────────────
   useEffect(() => {
@@ -1273,12 +1288,11 @@ export default function DashboardScreen({ token, onLogout }) {
         completedDates={completedDates}
       />
 
-      {/* ── Thẻ AI: hộp thư, thời tiết, cặp đôi (water_agent) ── */}
+      {/* ── Thẻ AI: hộp thư (water_agent) — "Cặp đôi" nay nằm ở tab "Tôi" ── */}
       <AgentHomeCards
         token={token}
         apiBase={API_BASE}
         authFetch={authFetch}
-        onGoalChanged={setGoalMl}
       />
 
       {/* ── Streak Recovery Banner ── */}
@@ -1411,6 +1425,9 @@ export default function DashboardScreen({ token, onLogout }) {
       isPushEnabled={isPushEnabled}
       reminderTimesCount={selectedTimes.length}
       onOpenNotifications={handleOpenNotifications}
+      token={token}
+      apiBase={API_BASE}
+      authFetch={authFetch}
     />
     ),
     [
@@ -1422,6 +1439,8 @@ export default function DashboardScreen({ token, onLogout }) {
       isPushEnabled,
       selectedTimes.length,
       handleOpenNotifications,
+      token,
+      authFetch,
     ],
   );
 

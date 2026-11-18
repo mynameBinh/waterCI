@@ -1,9 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
   Easing,
   Image,
+  LayoutAnimation,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -15,6 +18,19 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAgentApi } from "../components/agent/AgentHomeCards";
+import CoupleHeart from "../components/agent/CoupleHeart";
+import FlameStreak from "../components/agent/FlameStreak";
+import {
+  Avatar,
+  avatarSource,
+  deleteRemoteAvatar,
+  pickAvatar,
+  removeAvatar,
+  uploadAvatar,
+  useAvatarUri,
+} from "../components/Avatar";
+import { CoupleSheetBody, useCouple } from "../components/agent/CoupleSheet";
 import { getAgentName } from "../context/aiAgents";
 import { getAiAvatar } from "../context/aiThemes";
 import { useTheme } from "../context/ThemeContext";
@@ -42,26 +58,47 @@ const SectionHeader = ({ title, value, colors }) => (
   </View>
 );
 
-// Dòng thu gọn: chỉ hiện tên mục + giá trị đang chọn, chạm vào mới mở bảng chọn
-const PickerRow = ({ title, valueNode, onPress, colors }) => (
+// Dòng cài đặt gọn: icon nhỏ + tên mục bên trái, giá trị đang chọn + mũi tên bên phải; chạm vào mới mở bảng chọn
+const PickerRow = ({ icon, title, valueNode, onPress, colors, first, badge }) => (
   <>
-    <View style={[styles.divider, { backgroundColor: colors.border }]} />
+    {!first && (
+      <View style={[styles.rowLine, { backgroundColor: colors.border }]} />
+    )}
     <TouchableOpacity
-      style={styles.pickerRow}
+      style={styles.compactRow}
       onPress={onPress}
-      activeOpacity={0.75}
+      activeOpacity={0.7}
       accessibilityRole="button"
       accessibilityLabel={title}
     >
-      <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 0 }]}>
+      <View style={styles.compactIcon}>
+        <Ionicons name={icon} size={19} color={colors.textMuted} />
+        {badge && (
+          <View
+            style={[
+              styles.compactBadge,
+              { backgroundColor: colors.primary, borderColor: colors.card },
+            ]}
+          />
+        )}
+      </View>
+      <Text
+        style={[styles.compactTitle, { color: colors.text }]}
+        numberOfLines={1}
+      >
         {title}
       </Text>
       <View style={styles.pickerRowRight}>
         {valueNode}
-        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+        <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
       </View>
     </TouchableOpacity>
   </>
+);
+
+// Nhãn (tag) đặt phía trên mỗi nhóm cài đặt
+const SectionTag = ({ label, colors }) => (
+  <Text style={[styles.tagText, { color: colors.textMuted }]}>{label}</Text>
 );
 
 // Bảng chọn trượt từ dưới lên: chạm vùng tối bên ngoài, bấm X hoặc nút Back (Android) là đóng.
@@ -103,7 +140,10 @@ const PickerSheet = ({ visible, onClose, title, colors, children }) => {
       statusBarTranslucent
       onRequestClose={onClose}
     >
-      <View style={styles.sheetRoot}>
+      <KeyboardAvoidingView
+        style={styles.sheetRoot}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+      >
         <Animated.View
           style={[
             StyleSheet.absoluteFill,
@@ -152,12 +192,13 @@ const PickerSheet = ({ visible, onClose, title, colors, children }) => {
           <ScrollView
             bounces={false}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.sheetBody}
           >
             {children}
           </ScrollView>
         </Animated.View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };
@@ -171,6 +212,9 @@ const ProfileTab = memo(function ProfileTab({
   isPushEnabled,
   reminderTimesCount,
   onOpenNotifications,
+  token,
+  apiBase,
+  authFetch,
 }) {
   const {
     themePreference,
@@ -192,8 +236,99 @@ const ProfileTab = memo(function ProfileTab({
   const currentDeco = decoList.find((d) => d.key === decorationKey);
   const aiThemeList = Object.entries(aiThemes || {});
   const currentAgentName = getAgentName(aiThemeKey);
+  const currentTheme =
+    THEME_OPTIONS.find((o) => o.key === themePreference) || THEME_OPTIONS[2];
   const [aiOpen, setAiOpen] = useState(false); // bảng chọn AI-agent
   const [styleOpen, setStyleOpen] = useState(false); // bảng "Màu & nút chụp"
+  const [themeOpen, setThemeOpen] = useState(false); // bảng "Chế độ hiển thị" (sáng / tối / hệ thống)
+  const [settingsOpen, setSettingsOpen] = useState(false); // mục "Cài đặt" sổ xuống / thu gọn
+  const toggleSettings = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setSettingsOpen((v) => !v);
+  }, []);
+  const [coupleOpen, setCoupleOpen] = useState(false); // bảng "Cặp đôi"
+  const coupleApi = useAgentApi(token, apiBase, authFetch);
+  const couple = useCouple(coupleApi, !!token);
+
+  // ── Ảnh đại diện: lưu trên máy (hiện ở mọi nơi), đồng bộ lên server để người kia trong Cặp đôi thấy ──
+  const myAvatarUri = useAvatarUri(username);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const syncArgs = useMemo(() => ({ token, apiBase, authFetch }), [token, apiBase, authFetch]);
+  const myServerV = couple.c?.my_avatar_v;
+  const partnerServerV = couple.c?.partner_avatar_v;
+
+  const syncUp = useCallback(
+    async (uri) => {
+      if (!token || !uri) return;
+      try {
+        await uploadAvatar({ uri, ...syncArgs });
+        couple.reload();
+      } catch {
+        /* offline: ảnh vẫn dùng được trên máy, lần mở sau sẽ tự đồng bộ lại */
+      }
+    },
+    [token, syncArgs, couple.reload],
+  );
+
+  const onPickAvatar = useCallback(async () => {
+    if (avatarBusy) return;
+    setAvatarBusy(true);
+    try {
+      const uri = await pickAvatar(username);
+      if (uri) await syncUp(uri);
+    } catch {
+      Alert.alert("Không chọn được ảnh", "Hãy cho phép truy cập ảnh trong Cài đặt rồi thử lại nhé.");
+    } finally {
+      setAvatarBusy(false);
+    }
+  }, [avatarBusy, username, syncUp]);
+
+  const onAvatarPress = useCallback(() => {
+    if (!myAvatarUri) return onPickAvatar();
+    Alert.alert("Ảnh đại diện", undefined, [
+      { text: "Chọn ảnh mới", onPress: onPickAvatar },
+      {
+        text: "Xoá ảnh",
+        style: "destructive",
+        onPress: async () => {
+          await removeAvatar(username);
+          if (token) deleteRemoteAvatar(syncArgs).then(couple.reload).catch(() => {});
+        },
+      },
+      { text: "Huỷ", style: "cancel" },
+    ]);
+  }, [myAvatarUri, onPickAvatar, username, token, syncArgs, couple.reload]);
+
+  // Có ảnh trên máy mà server chưa có (đổi máy, mất mạng lúc chọn...) -> tự gửi lên 1 lần
+  const reuploaded = useRef(false);
+  useEffect(() => {
+    if (reuploaded.current || !myAvatarUri || !couple.c || myServerV) return;
+    reuploaded.current = true;
+    syncUp(myAvatarUri);
+  }, [myAvatarUri, couple.c, myServerV, syncUp]);
+
+  // Ảnh của mình: ưu tiên ảnh trên máy; máy mới chưa có thì lấy bản trên server
+  const mySource = useMemo(
+    () => avatarSource({ apiBase, token, username, version: myServerV }),
+    [apiBase, token, username, myServerV],
+  );
+  const partnerName = couple.c?.partner_username;
+  const partnerSource = useMemo(
+    () => avatarSource({ apiBase, token, username: partnerName, version: partnerServerV }),
+    [apiBase, token, partnerName, partnerServerV],
+  );
+  const coupleAvatars = useMemo(
+    () => ({ myName: username, myUri: myAvatarUri, mySource: myAvatarUri ? null : mySource, partnerSource }),
+    [username, myAvatarUri, mySource, partnerSource],
+  );
+
+  const coupleMood =
+    couple.c?.visible && couple.c?.partner
+      ? couple.c.me?.day_complete && couple.c.partner.day_complete
+        ? "happy"
+        : "calm"
+      : "flat";
+  const coupleLinked = !!couple.c?.partner_username;
 
   return (
     <ScrollView
@@ -213,18 +348,30 @@ const ProfileTab = memo(function ProfileTab({
         >
           <Ionicons name="log-out-outline" size={18} color="#ef4444" />
         </TouchableOpacity>
-        <View
-          style={[
-            styles.avatarWrapper,
-            {
-              borderColor: colors.card,
-              backgroundColor: colors.background,
-              shadowColor: colors.primary,
-            },
-          ]}
+        <TouchableOpacity
+          onPress={onAvatarPress}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Đổi ảnh đại diện"
         >
-          <Ionicons name="person" size={50} color={colors.primary} />
-        </View>
+          <View
+            style={[
+              styles.avatarWrapper,
+              {
+                borderColor: colors.card,
+                backgroundColor: colors.background,
+                shadowColor: colors.primary,
+              },
+            ]}
+          >
+            <Avatar
+              name={username}
+              uri={myAvatarUri}
+              source={myAvatarUri ? null : mySource}
+              size={92}
+            />
+          </View>
+        </TouchableOpacity>
         <Text style={[styles.profileName, { color: colors.text }]}>
           {username}
         </Text>
@@ -257,322 +404,417 @@ const ProfileTab = memo(function ProfileTab({
         </View>
       </View>
 
-      {/* Nhắc nhở */}
+
+      {/* Cặp đôi — thẻ nổi bật ngay dưới mục tiêu: hai ảnh đại diện + sóng nhịp tim, chạm để mở */}
+      <TouchableOpacity
+        style={[
+          styles.coupleCard,
+          { backgroundColor: colors.primarySoft, borderColor: colors.primaryBorder },
+        ]}
+        onPress={() => setCoupleOpen(true)}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel="Cặp đôi"
+      >
+        <View style={styles.coupleHead}>
+          <Ionicons name="heart" size={18} color={colors.primary} />
+          <Text style={[styles.coupleTitle, { color: colors.text }]}>Cặp đôi</Text>
+          {couple.needsAttention && (
+            <View style={[styles.coupleDot, { backgroundColor: colors.primary }]} />
+          )}
+          <View style={{ flex: 1 }} />
+          {coupleLinked && couple.c?.visible && couple.c?.joint_streak > 0 ? (
+            <View style={styles.coupleStreakRow}>
+              <Text
+                style={[styles.coupleSummary, { color: colors.primaryText }]}
+                numberOfLines={1}
+              >
+                {couple.c.partner_username}
+              </Text>
+              <FlameStreak count={couple.c.joint_streak} size={15} />
+            </View>
+          ) : (
+            <Text
+              style={[styles.coupleSummary, { color: colors.primaryText }]}
+              numberOfLines={1}
+            >
+              {coupleLinked ? couple.summary : "Liên kết ngay"}
+            </Text>
+          )}
+          <Ionicons name="chevron-forward" size={16} color={colors.primaryText} />
+        </View>
+        {coupleLinked ? (
+          <CoupleHeart
+            colors={colors}
+            mood={coupleMood}
+            myName={username}
+            myUri={myAvatarUri}
+            mySource={myAvatarUri ? null : mySource}
+            partnerName={partnerName}
+            partnerSource={partnerSource}
+          />
+        ) : (
+          <Text style={[styles.coupleHint, { color: colors.textMuted }]}>
+            {couple.summary === "Chưa liên kết"
+              ? "Liên kết với người kia để xem tiến độ của nhau, giữ chuỗi chung và trả lời câu hỏi mỗi ngày."
+              : couple.summary}
+          </Text>
+        )}
+      </TouchableOpacity>
+      <PickerSheet
+        visible={coupleOpen}
+        onClose={() => setCoupleOpen(false)}
+        title="Cặp đôi"
+        colors={colors}
+      >
+        <CoupleSheetBody colors={colors} couple={couple} avatars={coupleAvatars} />
+      </PickerSheet>
+
+      {/* Cài đặt: thu gọn mặc định, chạm vào để sổ xuống */}
       <TouchableOpacity
         style={[
           styles.settingsCard,
-          styles.notifCard,
+          styles.settingsHeader,
           { backgroundColor: colors.card, shadowColor: colors.dockShadow },
+          settingsOpen && { marginBottom: 16 },
         ]}
-        onPress={onOpenNotifications}
-        activeOpacity={0.75}
+        onPress={toggleSettings}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel="Cài đặt"
+        accessibilityState={{ expanded: settingsOpen }}
       >
-        <View style={styles.rowLeft}>
-          <View
-            style={[
-              styles.notifIconWrap,
-              { backgroundColor: colors.primarySoft },
-            ]}
-          >
-            <Ionicons name="notifications" size={20} color={colors.primary} />
-          </View>
-          <View>
-            <Text
-              style={[
-                styles.sectionTitle,
-                { color: colors.text, marginBottom: 2 },
-              ]}
-            >
-              Cài đặt nhắc nhở
-            </Text>
-            <Text style={[styles.notifSub, { color: colors.textMuted }]}>
-              {isPushEnabled ? "Đang bật" : "Đang tắt"} · {reminderTimesCount}{" "}
-              khung giờ
-            </Text>
-          </View>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+        <Ionicons name="settings-outline" size={19} color={colors.textMuted} />
+        <Text style={[styles.settingsHeaderText, { color: colors.text }]}>Cài đặt</Text>
+        <Ionicons
+          name={settingsOpen ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={colors.textMuted}
+        />
       </TouchableOpacity>
-
-      {/* Theme sáng / tối */}
-      <View
-        style={[
-          styles.settingsCard,
-          { backgroundColor: colors.card, shadowColor: colors.dockShadow },
-        ]}
-      >
-        <Text style={[styles.sectionTitle, { color: colors.text }]}>
-          Giao diện & màu sắc
-        </Text>
-        <View style={styles.themeRow}>
-          {THEME_OPTIONS.map(({ key, icon, label }) => {
-            const active = themePreference === key;
-            return (
-              <TouchableOpacity
-                key={key}
-                style={[
-                  styles.themeBtn,
-                  active
-                    ? {
-                        backgroundColor: colors.primarySoft,
-                        borderColor: colors.primaryBorder,
-                      }
-                    : {
-                        backgroundColor: colors.background,
-                        borderColor: colors.border,
-                      },
-                ]}
-                onPress={() => changeTheme(key)}
-              >
-                <Ionicons
-                  name={icon}
-                  size={24}
-                  color={active ? colors.primary : colors.textMuted}
-                />
-                <Text
-                  style={[
-                    styles.themeText,
-                    { color: active ? colors.primary : colors.textMuted },
-                  ]}
-                >
-                  {label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* AI-agent: dòng thu gọn, chạm vào mở bảng chọn trượt từ dưới lên.
-            Ảnh dùng resizeMode="contain" và KHÔNG phóng to -> PNG xoá phông luôn hiện đủ, không bị cắt. */}
-        {aiThemeList.length > 0 && (
-          <>
+      {settingsOpen && (
+        <View>
+          <SectionTag label="Chung" colors={colors} />
+          <View style={[styles.settingsCard, styles.compactCard, styles.tagged, { backgroundColor: colors.card, shadowColor: colors.dockShadow }]}>
             <PickerRow
-              title="AI-agent"
+              first
+              icon="notifications-outline"
+              title="Nhắc nhở"
               colors={colors}
-              onPress={() => setAiOpen(true)}
+              onPress={onOpenNotifications}
+              valueNode={
+                <Text style={[styles.rowValue, { color: colors.textMuted }]}>
+                  {isPushEnabled ? "Bật" : "Tắt"} · {reminderTimesCount} giờ
+                </Text>
+              }
+            />
+            {/* AI-agent: dòng thu gọn, chạm vào mở bảng chọn trượt từ dưới lên.
+                Ảnh dùng resizeMode="contain" và KHÔNG phóng to -> PNG xoá phông luôn hiện đủ, không bị cắt. */}
+            {aiThemeList.length > 0 && (
+              <>
+                <PickerRow
+                  icon="sparkles-outline"
+                  title="AI-agent"
+                  colors={colors}
+                  onPress={() => setAiOpen(true)}
+                  valueNode={
+                    <>
+                      <Image
+                        source={getAiAvatar(aiThemeKey, accentKey)}
+                        fadeDuration={0}
+                        resizeMode="contain"
+                        style={styles.miniThumb}
+                      />
+                      <Text style={[styles.rowValue, { color: colors.textMuted }]}>
+                        {currentAgentName}
+                      </Text>
+                    </>
+                  }
+                />
+                <PickerSheet
+                  visible={aiOpen}
+                  onClose={() => setAiOpen(false)}
+                  title="Chọn AI-agent"
+                  colors={colors}
+                >
+                  <View style={styles.agentGrid}>
+                    {aiThemeList.map(([key]) => {
+                      const active = aiThemeKey === key;
+                      const name = getAgentName(key);
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          style={styles.agentItem}
+                          onPress={() => {
+                            changeAiTheme?.(key);
+                            setTimeout(() => setAiOpen(false), 220); // cho thấy dấu tích rồi mới đóng
+                          }}
+                          activeOpacity={0.8}
+                          accessibilityRole="button"
+                          accessibilityLabel={`AI-agent ${name}`}
+                          accessibilityState={{ selected: active }}
+                        >
+                          <View
+                            style={[
+                              styles.agentBox,
+                              {
+                                borderColor: active ? colors.primary : colors.border,
+                                backgroundColor: active
+                                  ? colors.primarySoft
+                                  : colors.background,
+                              },
+                            ]}
+                          >
+                            <Image
+                              source={getAiAvatar(key, accentKey)}
+                              fadeDuration={0}
+                              resizeMode="contain"
+                              style={styles.agentImg}
+                            />
+                            {active && (
+                              <View
+                                style={[
+                                  styles.checkBadge,
+                                  {
+                                    backgroundColor: colors.primary,
+                                    borderColor: colors.card,
+                                  },
+                                ]}
+                              >
+                                <Ionicons name="checkmark" size={12} color="#ffffff" />
+                              </View>
+                            )}
+                          </View>
+                          <Text
+                            style={[
+                              styles.itemLabel,
+                              {
+                                color: active ? colors.text : colors.textMuted,
+                                fontWeight: active ? "700" : "600",
+                              },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </PickerSheet>
+              </>
+            )}
+          </View>
+
+          <SectionTag label="Giao diện" colors={colors} />
+          <View style={[styles.settingsCard, styles.compactCard, styles.tagged, { backgroundColor: colors.card, shadowColor: colors.dockShadow }]}>
+            <PickerRow
+              first
+              icon="contrast-outline"
+              title="Chế độ hiển thị"
+              colors={colors}
+              onPress={() => setThemeOpen(true)}
               valueNode={
                 <>
-                  <Image
-                    source={getAiAvatar(aiThemeKey, accentKey)}
-                    fadeDuration={0}
-                    resizeMode="contain"
-                    style={styles.miniThumb}
+                  <Ionicons
+                    name={currentTheme.icon}
+                    size={16}
+                    color={colors.textMuted}
+                    style={{ marginRight: 6 }}
                   />
                   <Text style={[styles.rowValue, { color: colors.textMuted }]}>
-                    {currentAgentName}
+                    {currentTheme.label}
                   </Text>
                 </>
               }
             />
             <PickerSheet
-              visible={aiOpen}
-              onClose={() => setAiOpen(false)}
-              title="Chọn AI-agent"
+              visible={themeOpen}
+              onClose={() => setThemeOpen(false)}
+              title="Chế độ hiển thị"
               colors={colors}
             >
-              <View style={styles.agentGrid}>
-                {aiThemeList.map(([key]) => {
-                  const active = aiThemeKey === key;
-                  const name = getAgentName(key);
+              <View style={styles.themeRow}>
+                {THEME_OPTIONS.map(({ key, icon, label }) => {
+                  const active = themePreference === key;
                   return (
                     <TouchableOpacity
                       key={key}
-                      style={styles.agentItem}
+                      style={[
+                        styles.themeBtn,
+                        active
+                          ? {
+                              backgroundColor: colors.primarySoft,
+                              borderColor: colors.primaryBorder,
+                            }
+                          : {
+                              backgroundColor: colors.background,
+                              borderColor: colors.border,
+                            },
+                      ]}
                       onPress={() => {
-                        changeAiTheme?.(key);
-                        setTimeout(() => setAiOpen(false), 220); // cho thấy dấu tích rồi mới đóng
+                        changeTheme(key);
+                        setTimeout(() => setThemeOpen(false), 220); // cho thấy đã chọn rồi mới đóng
                       }}
-                      activeOpacity={0.8}
                       accessibilityRole="button"
-                      accessibilityLabel={`AI-agent ${name}`}
+                      accessibilityLabel={label}
                       accessibilityState={{ selected: active }}
                     >
-                      <View
-                        style={[
-                          styles.agentBox,
-                          {
-                            borderColor: active ? colors.primary : colors.border,
-                            backgroundColor: active
-                              ? colors.primarySoft
-                              : colors.background,
-                          },
-                        ]}
-                      >
-                        <Image
-                          source={getAiAvatar(key, accentKey)}
-                          fadeDuration={0}
-                          resizeMode="contain"
-                          style={styles.agentImg}
-                        />
-                        {active && (
-                          <View
-                            style={[
-                              styles.checkBadge,
-                              {
-                                backgroundColor: colors.primary,
-                                borderColor: colors.card,
-                              },
-                            ]}
-                          >
-                            <Ionicons name="checkmark" size={12} color="#ffffff" />
-                          </View>
-                        )}
-                      </View>
+                      <Ionicons
+                        name={icon}
+                        size={24}
+                        color={active ? colors.primary : colors.textMuted}
+                      />
                       <Text
                         style={[
-                          styles.itemLabel,
-                          {
-                            color: active ? colors.text : colors.textMuted,
-                            fontWeight: active ? "700" : "600",
-                          },
+                          styles.themeText,
+                          { color: active ? colors.primary : colors.textMuted },
                         ]}
-                        numberOfLines={1}
                       >
-                        {name}
+                        {label}
                       </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
             </PickerSheet>
-          </>
-        )}
 
-        {/* Màu & nút chụp: dòng thu gọn, chạm vào mở bảng chọn (chọn nhiều lần, chạm ra ngoài để đóng) */}
-        {accentList.length === 0 && decoList.length === 0 ? (
-          <>
-            <View style={[styles.divider, { backgroundColor: colors.border }]} />
-            <Text style={[styles.notifSub, { color: colors.textMuted }]}>
-              Chưa có bảng màu / trang trí nút — hãy thay file
-              src/context/ThemeContext.js bằng bản mới.
-            </Text>
-          </>
-        ) : (
-          <>
-            <PickerRow
-              title="Màu & nút chụp"
-              colors={colors}
-              onPress={() => setStyleOpen(true)}
-              valueNode={
-                <>
-                  <View
-                    style={[
-                      styles.miniDot,
-                      { backgroundColor: currentAccent?.primary },
-                    ]}
-                  />
-                  <Text style={styles.miniEmoji}>{currentDeco?.emoji}</Text>
-                </>
-              }
-            />
-            <PickerSheet
-              visible={styleOpen}
-              onClose={() => setStyleOpen(false)}
-              title="Màu & nút chụp"
-              colors={colors}
-            >
-              {accentList.length > 0 && (
-                <>
-                  <SectionHeader
-                    title="Màu chủ đạo"
-                    value={currentAccent?.label}
-                    colors={colors}
-                  />
-                  <View style={styles.swatchRow}>
-                    {accentList.map(([key, a]) => {
-                      const active = accentKey === key;
-                      return (
-                        <TouchableOpacity
-                          key={key}
-                          style={styles.swatchItem}
-                          onPress={() => changeAccent?.(key)}
-                          activeOpacity={0.8}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Màu ${a.label}`}
-                          accessibilityState={{ selected: active }}
-                        >
-                          <View
-                            style={[
-                              styles.swatchRing,
-                              { borderColor: active ? a.primary : "transparent" },
-                            ]}
-                          >
-                            <View
-                              style={[styles.swatchDot, { backgroundColor: a.primary }]}
+            {/* Màu & nút chụp: dòng thu gọn, chạm vào mở bảng chọn (chọn nhiều lần, chạm ra ngoài để đóng) */}
+            {accentList.length === 0 && decoList.length === 0 ? (
+              <>
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                <Text style={[styles.notifSub, { color: colors.textMuted }]}>
+                  Chưa có bảng màu / trang trí nút — hãy thay file
+                  src/context/ThemeContext.js bằng bản mới.
+                </Text>
+              </>
+            ) : (
+              <>
+                <PickerRow
+                  icon="color-palette-outline"
+                  title="Màu & nút chụp"
+                  colors={colors}
+                  onPress={() => setStyleOpen(true)}
+                  valueNode={
+                    <>
+                      <View
+                        style={[
+                          styles.miniDot,
+                          { backgroundColor: currentAccent?.primary },
+                        ]}
+                      />
+                    </>
+                  }
+                />
+                <PickerSheet
+                  visible={styleOpen}
+                  onClose={() => setStyleOpen(false)}
+                  title="Màu & nút chụp"
+                  colors={colors}
+                >
+                  {accentList.length > 0 && (
+                    <>
+                      <SectionHeader
+                        title="Màu chủ đạo"
+                        value={currentAccent?.label}
+                        colors={colors}
+                      />
+                      <View style={styles.swatchRow}>
+                        {accentList.map(([key, a]) => {
+                          const active = accentKey === key;
+                          return (
+                            <TouchableOpacity
+                              key={key}
+                              style={styles.swatchItem}
+                              onPress={() => changeAccent?.(key)}
+                              activeOpacity={0.8}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Màu ${a.label}`}
+                              accessibilityState={{ selected: active }}
                             >
-                              {active && (
-                                <Ionicons name="checkmark" size={18} color="#ffffff" />
-                              )}
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </>
-              )}
+                              <View
+                                style={[
+                                  styles.swatchRing,
+                                  { borderColor: active ? a.primary : "transparent" },
+                                ]}
+                              >
+                                <View
+                                  style={[styles.swatchDot, { backgroundColor: a.primary }]}
+                                >
+                                  {active && (
+                                    <Ionicons name="checkmark" size={18} color="#ffffff" />
+                                  )}
+                                </View>
+                              </View>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </>
+                  )}
 
-              {decoList.length > 0 && (
-                <>
-                  <View
-                    style={[
-                      styles.divider,
-                      { backgroundColor: colors.border, marginTop: 20 },
-                    ]}
-                  />
-                  <SectionHeader
-                    title="Trang trí nút chụp"
-                    value={currentDeco?.label}
-                    colors={colors}
-                  />
-                  <View style={styles.chipWrap}>
-                    {decoList.map((d) => {
-                      const active = decorationKey === d.key;
-                      return (
-                        <TouchableOpacity
-                          key={d.key}
-                          onPress={() => changeDecoration?.(d.key)}
-                          activeOpacity={0.8}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Trang trí ${d.label}`}
-                          accessibilityState={{ selected: active }}
-                          style={[
-                            styles.chip,
-                            active
-                              ? {
-                                  backgroundColor: colors.primarySoft,
-                                  borderColor: colors.primary,
-                                }
-                              : {
-                                  backgroundColor: colors.background,
-                                  borderColor: colors.border,
-                                },
-                          ]}
-                        >
-                          <Text style={styles.chipEmoji}>{d.emoji}</Text>
-                          <Text
-                            style={[
-                              styles.chipText,
-                              {
-                                color: active ? colors.primaryText : colors.textMuted,
-                                fontWeight: active ? "700" : "600",
-                              },
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {d.label}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </>
-              )}
-            </PickerSheet>
-          </>
-        )}
-      </View>
-
+                  {decoList.length > 0 && (
+                    <>
+                      <View
+                        style={[
+                          styles.divider,
+                          { backgroundColor: colors.border, marginTop: 20 },
+                        ]}
+                      />
+                      <SectionHeader
+                        title="Trang trí nút chụp"
+                        value={currentDeco?.label}
+                        colors={colors}
+                      />
+                      <View style={styles.chipWrap}>
+                        {decoList.map((d) => {
+                          const active = decorationKey === d.key;
+                          return (
+                            <TouchableOpacity
+                              key={d.key}
+                              onPress={() => changeDecoration?.(d.key)}
+                              activeOpacity={0.8}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Trang trí ${d.label}`}
+                              accessibilityState={{ selected: active }}
+                              style={[
+                                styles.chip,
+                                active
+                                  ? {
+                                      backgroundColor: colors.primarySoft,
+                                      borderColor: colors.primary,
+                                    }
+                                  : {
+                                      backgroundColor: colors.background,
+                                      borderColor: colors.border,
+                                    },
+                              ]}
+                            >
+                              <Text style={styles.chipEmoji}>{d.emoji}</Text>
+                              <Text
+                                style={[
+                                  styles.chipText,
+                                  {
+                                    color: active ? colors.primaryText : colors.textMuted,
+                                    fontWeight: active ? "700" : "600",
+                                  },
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {d.label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </>
+                  )}
+                </PickerSheet>
+              </>
+            )}
+          </View>
+        </View>
+      )}
     </ScrollView>
   );
 });
@@ -580,6 +822,56 @@ const ProfileTab = memo(function ProfileTab({
 export default ProfileTab;
 
 const styles = StyleSheet.create({
+  settingsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    marginBottom: 24,
+  },
+  settingsHeaderText: { flex: 1, fontSize: 15, fontWeight: "700", marginLeft: 10 },
+  tagText: {
+    fontSize: 11.5,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginLeft: 6,
+    marginBottom: 8,
+  },
+  tagged: { marginBottom: 22 },
+  coupleCard: {
+    borderRadius: 22,
+    borderWidth: 1.5,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
+    marginBottom: 24,
+  },
+  coupleHead: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  coupleTitle: { fontSize: 16, fontWeight: "800", marginLeft: 8 },
+  coupleDot: { width: 8, height: 8, borderRadius: 4, marginLeft: 8 },
+  coupleStreakRow: { flexDirection: "row", alignItems: "center", flexShrink: 1 },
+  coupleSummary: { fontSize: 13, fontWeight: "700", marginRight: 6, flexShrink: 1 },
+  coupleHint: { fontSize: 13, lineHeight: 19, marginBottom: 2 },
+  compactCard: { paddingVertical: 4, paddingHorizontal: 16 },
+  compactRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 48,
+    paddingVertical: 8,
+  },
+  compactIcon: { width: 26, alignItems: "flex-start", justifyContent: "center" },
+  compactBadge: {
+    position: "absolute",
+    top: -2,
+    left: 11,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 2,
+  },
+  compactTitle: { fontSize: 14.5, fontWeight: "600", marginRight: 12 },
+  rowLine: { height: StyleSheet.hairlineWidth },
+  rowValueFlex: { flexShrink: 1, textAlign: "right" },
   profileHeader: { alignItems: "center", marginBottom: 32, marginTop: 20 },
   avatarWrapper: {
     width: 100,
@@ -623,6 +915,15 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   notifSub: { fontSize: 12, marginTop: 2 },
+  coupleBadge: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: 11,
+    height: 11,
+    borderRadius: 6,
+    borderWidth: 2,
+  },
   sectionTitle: { fontSize: 16, fontWeight: "700", marginBottom: 6 },
   goalRow: {
     flexDirection: "row",
@@ -648,8 +949,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  pickerRowRight: { flexDirection: "row", alignItems: "center" },
-  rowValue: { fontSize: 13, fontWeight: "600", marginRight: 6 },
+  pickerRowRight: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "flex-end" },
+  rowValue: { fontSize: 13, fontWeight: "600", marginRight: 4 },
   miniThumb: { width: 26, height: 26, marginRight: 8 },
   miniDot: { width: 16, height: 16, borderRadius: 8, marginRight: 8 },
   miniEmoji: { fontSize: 16, marginRight: 8 },
@@ -659,6 +960,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     paddingTop: 10,
+    flexShrink: 1, // co lại khi bàn phím mở để không tràn lên trên
   },
   sheetHandle: {
     alignSelf: "center",

@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from "react-native";
 import { useTheme } from "../context/ThemeContext";
 import BottomSheet from "./BottomSheet";
+import SkillsSection from "./SkillsSection"; // >>> skills
 
 // key phải khớp với backend (CHAT_MODELS trong main.py)
 export const CHAT_MODELS = [
@@ -19,8 +20,17 @@ const ChatPlusSheet = memo(function ChatPlusSheet({
   onOpenGoogle, // mở màn "Tài khoản Google" (AIChatModal truyền vào)
   onClose,
   attachFull = false,
+  apiBase, // >>> skills: để mục "Skill" gọi API /api/brain/skills
+  token,
+  authFetch,
 }) {
   const { colors } = useTheme();
+  const [openModel, setOpenModel] = useState(false);
+  useEffect(() => {
+    if (!visible) {
+      setOpenModel(false);
+    }
+  }, [visible]);
 
   const Group = ({ title, children }) => (
     <View style={styles.group}>
@@ -61,9 +71,61 @@ const ChatPlusSheet = memo(function ChatPlusSheet({
     />
   );
 
+  // Dòng tiêu đề có mũi tên: bấm để xổ / thu. Là HÀM trả về phần tử (không phải component) nên không bị dựng lại mỗi lần render.
+  const renderHead = (icon, title, sub, open, onPress) => (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: open }}
+      style={styles.row}
+    >
+      <View style={[styles.iconWrap, { backgroundColor: open ? colors.primary : colors.primarySoft }]}>
+        <Ionicons name={icon} size={20} color={open ? "#ffffff" : colors.primary} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.rowTitle, { color: open ? colors.primary : colors.text }]}>{title}</Text>
+        {!!sub && <Text style={[styles.rowSub, { color: colors.textMuted }]}>{sub}</Text>}
+      </View>
+      <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={open ? colors.primary : colors.textMuted} />
+    </TouchableOpacity>
+  );
+  // Khung có tiêu đề nhỏ phía trên (giống Group) nhưng là HÀM, không phải component -> phần bên trong không bị dựng lại mỗi lần render
+  const renderGroup = (title, children) => (
+    <View style={styles.group}>
+      <Text style={[styles.section, { color: colors.textMuted }]}>{title}</Text>
+      <View style={[styles.card, { backgroundColor: colors.background, borderColor: colors.border }]}>{children}</View>
+    </View>
+  );
+  // Phần xổ xuống: nền khác, thụt vào thẳng hàng với chữ của dòng cha, có đường dọc nối với icon cha, chữ nhỏ hơn, không có ô icon
+  const renderBody = (children) => (
+    <View style={[styles.body, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
+      <View pointerEvents="none" style={[styles.guide, { backgroundColor: colors.border }]} />
+      {children}
+    </View>
+  );
+  const renderSub = ({ key, title, sub, onPress, right, active, last }) => (
+    <View key={key}>
+      <TouchableOpacity activeOpacity={0.7} onPress={onPress} style={styles.subRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.subTitle, { color: active ? colors.primary : colors.text }]}>{title}</Text>
+          {!!sub && <Text style={[styles.subSub, { color: colors.textMuted }]}>{sub}</Text>}
+        </View>
+        {right}
+      </TouchableOpacity>
+      {!last && <View style={[styles.subSep, { backgroundColor: colors.border }]} />}
+    </View>
+  );
+  const curModel = CHAT_MODELS.find((m) => m.key === prefs.model) || CHAT_MODELS[1];
+
   return (
     <BottomSheet visible={visible} onClose={onClose} maxHeightRatio={0.86}>
-      <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
+      >
         <Group title="Thêm vào tin nhắn">
           <Row
             icon="document-attach-outline"
@@ -88,6 +150,7 @@ const ChatPlusSheet = memo(function ChatPlusSheet({
           </Group>
         )}
 
+        {/* Công cụ: hiện thẳng ra ngoài như "Tệp" và "Tài khoản" */}
         <Group title="Công cụ">
           <Row
             icon="globe-outline"
@@ -106,28 +169,42 @@ const ChatPlusSheet = memo(function ChatPlusSheet({
           />
         </Group>
 
-        <Group title="Model">
-          {CHAT_MODELS.map((m, i) => {
-            const active = prefs.model === m.key;
-            return (
-              <Row
-                key={m.key}
-                icon={m.icon}
-                title={m.label}
-                sub={m.sub}
-                onPress={() => onChangePrefs({ model: m.key })}
-                last={i === CHAT_MODELS.length - 1}
-                right={
-                  <Ionicons
-                    name={active ? "radio-button-on" : "radio-button-off"}
-                    size={22}
-                    color={active ? colors.primary : colors.border}
-                  />
-                }
-              />
-            );
-          })}
-        </Group>
+        {/* Model: tiêu đề phía trên, dòng bên trong hiện model đang chọn, bấm vào mới sổ các lựa chọn */}
+        {renderGroup(
+          "Model",
+          <>
+            {renderHead(curModel.icon, curModel.label, curModel.sub, openModel, () => setOpenModel((o) => !o))}
+            {openModel &&
+              renderBody(
+                CHAT_MODELS.map((m, i) => {
+                  const active = prefs.model === m.key;
+                  return renderSub({
+                    key: m.key,
+                    title: m.label,
+                    sub: m.sub,
+                    active,
+                    onPress: () => {
+                      onChangePrefs({ model: m.key });
+                      setOpenModel(false); // chọn xong tự thu lại cho gọn
+                    },
+                    last: i === CHAT_MODELS.length - 1,
+                    right: (
+                      <Ionicons
+                        name={active ? "radio-button-on" : "radio-button-off"}
+                        size={20}
+                        color={active ? colors.primary : colors.border}
+                      />
+                    ),
+                  });
+                }),
+              )}
+          </>,
+        )}
+
+        {/* Skill: tiêu đề phía trên (do SkillsSection tự vẽ), bấm vào mới sổ danh sách */}
+        {!!apiBase && !!token && ( // >>> skills
+          <SkillsSection key="skills" apiBase={apiBase} token={token} authFetch={authFetch} />
+        )}
       </ScrollView>
     </BottomSheet>
   );
@@ -151,4 +228,11 @@ const styles = StyleSheet.create({
   },
   rowTitle: { fontSize: 15, fontWeight: "700" },
   rowSub: { fontSize: 12.5, marginTop: 2, lineHeight: 17 },
+  // phần xổ xuống (con): thụt vào 66 = 14 (lề) + 38 (ô icon) + 14 (khoảng cách) để thẳng hàng chữ cha
+  body: { borderTopWidth: StyleSheet.hairlineWidth },
+  guide: { position: "absolute", left: 32, top: 0, bottom: 0, width: 2, borderRadius: 1, opacity: 0.7 },
+  subRow: { flexDirection: "row", alignItems: "center", paddingVertical: 9, paddingLeft: 66, paddingRight: 14 },
+  subSep: { height: StyleSheet.hairlineWidth, marginLeft: 66 },
+  subTitle: { fontSize: 14, fontWeight: "600" },
+  subSub: { fontSize: 12, marginTop: 1, lineHeight: 16 },
 });

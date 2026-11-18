@@ -4246,31 +4246,6 @@ const AIChatModal = memo(function AIChatModal({
       <Text style={[styles.emptySub, { color: colors.textMuted }]}>
         {agentText.emptySub}
       </Text>
-      <View style={styles.sugGrid}>
-        {agentText.suggestions.map((s) => (
-          <TouchableOpacity
-            key={s.text}
-            style={[
-              styles.sugCard,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-            onPress={() => setInput(s.text)}
-            activeOpacity={0.8}
-          >
-            <View
-              style={[styles.sugIcon, { backgroundColor: colors.primarySoft }]}
-            >
-              <Ionicons name={s.icon} size={18} color={colors.primary} />
-            </View>
-            <Text
-              numberOfLines={3}
-              style={[styles.sugText, { color: colors.text }]}
-            >
-              {s.text}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
     </View>
   );
 
@@ -4750,6 +4725,9 @@ const AIChatModal = memo(function AIChatModal({
                 visible={plusOpen}
                 prefs={prefs}
                 onChangePrefs={updatePrefs}
+                apiBase={apiBase} // >>> skills
+                token={token}
+                authFetch={authFetch}
                 attachFull={pending.length >= MAX_FILES}
                 onClose={() => setPlusOpen(false)}
                 onPickFile={() => {
