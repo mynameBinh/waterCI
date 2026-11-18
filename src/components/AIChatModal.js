@@ -58,6 +58,7 @@ import {
 } from "./chatFiles";
 import ChatPlusSheet, { CHAT_MODELS } from "./ChatPlusSheet";
 import ChoiceButtons from "./fileTools/ChoiceButtons";
+import AgentActionCards from "./agent/AgentActionCards"; // >>> water_agent
 import { applyFileMeta, extractChoices, extractFromAttrs, googleLinks, SERVER_FORMATS } from "./fileTools/exportMeta";
 import FileCardV2 from "./fileTools/FileCardV2";
 import { GoogleAccountSheet } from "./fileTools/GoogleAccountSection";
@@ -3312,6 +3313,7 @@ const AIChatModal = memo(function AIChatModal({
 
       let buf = "";
       let finished = false;
+      let agentActions = []; // >>> water_agent
       try {
         for (;;) {
           const { value, done } = await reader.read();
@@ -3342,7 +3344,19 @@ const AIChatModal = memo(function AIChatModal({
               setSendLabel("Đang viết câu trả lời…");
             } else if (ev.t === "status") {
               setSendLabel(
-                ev.s === "search" ? "Đang tìm kiếm web…" : "Đang suy nghĩ…",
+                ev.s === "search"
+                  ? "Đang tìm kiếm web…"
+                  : ev.s === "tool"
+                    ? "Đang làm việc…"
+                    : "Đang suy nghĩ…",
+              );
+            } else if (ev.t === "confirm" || ev.t === "action") { // >>> water_agent
+              agentActions = [...agentActions, ev];
+              const actionsSnapshot = agentActions;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === aid ? { ...m, actions: actionsSnapshot } : m,
+                ),
               );
             } else if (ev.t === "error") {
               throw new Error(
@@ -3363,6 +3377,10 @@ const AIChatModal = memo(function AIChatModal({
                         note: memoNote(ev.memory_events),
                         searched: !!ev.searched,
                         truncated: !!ev.truncated,
+                        actions:
+                          ev.actions && ev.actions.length
+                            ? ev.actions
+                            : agentActions, // >>> water_agent
                       }
                     : m,
                 ),
@@ -3901,6 +3919,13 @@ const AIChatModal = memo(function AIChatModal({
                     {item.note}
                   </Text>
                 </View>
+              )}
+              {!!item.actions?.length && ( // >>> water_agent
+                <AgentActionCards
+                  actions={item.actions}
+                  colors={colors}
+                  api={api}
+                />
               )}
             </View>
 

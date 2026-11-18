@@ -24,6 +24,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AIChatModal from "../components/AIChatModal";
+import AgentHomeCards from "../components/agent/AgentHomeCards"; // >>> water_agent
+import { useAgentSync } from "../components/agent/useAgentSync"; // >>> water_agent
 import CameraOverlay from "../components/CameraOverlay";
 import FloatingAIButton from "../components/FloatingAIButton";
 import { agentSlug, getAgentContent, getAgentName } from "../context/aiAgents";
@@ -316,6 +318,9 @@ export default function DashboardScreen({ token, onLogout }) {
   useEffect(() => {
     sessionExpiredRef.current = false;
   }, [token]);
+
+  // Nhắc nhở do AI/server tạo -> thông báo cục bộ (không cần push APNs) // >>> water_agent
+  useAgentSync({ token, apiBase: API_BASE, authFetch });
 
   // ── Streak: đồng bộ từ server (streak chỉ tăng khi đủ nước VÀ xong hết mục tiêu) ──
   const fetchStreak = useCallback(async () => {
@@ -1268,6 +1273,14 @@ export default function DashboardScreen({ token, onLogout }) {
         completedDates={completedDates}
       />
 
+      {/* ── Thẻ AI: hộp thư, thời tiết, cặp đôi (water_agent) ── */}
+      <AgentHomeCards
+        token={token}
+        apiBase={API_BASE}
+        authFetch={authFetch}
+        onGoalChanged={setGoalMl}
+      />
+
       {/* ── Streak Recovery Banner ── */}
       {canUseStreakRecovery && (
         <TouchableOpacity
@@ -1313,6 +1326,8 @@ export default function DashboardScreen({ token, onLogout }) {
       history,
       IS_ANDROID,
       dockClearance,
+      token,
+      authFetch, // >>> water_agent
     ],
   );
   const taskContent = useMemo(
