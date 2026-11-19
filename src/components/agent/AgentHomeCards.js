@@ -1,6 +1,6 @@
 // =============================================================================
 // AgentHomeCards — thẻ ở màn hình chính:
-//   Hộp thư: nhắc nhở / tin nhắn từ người kia / nhắc nhẹ của AI / ngày đặc biệt (chưa đọc).
+//   Hộp thư: nhắc nhở / tin nhắn từ người kia / nhắc nhẹ của AI / ngày đặc biệt / mốc bên nhau / bản tin tuần (chưa đọc).
 // (Chức năng "Cặp đôi" nay nằm ở tab "Tôi": xem CoupleSheet.js.)
 // File này cũng export vài helper dùng chung: useAgentApi, useRefreshOnActive, Btn, Input.
 // Tự gọi API (token + authFetch), không phụ thuộc state của Dashboard.
@@ -60,10 +60,13 @@ export const Btn = ({ colors, label, onPress, busy, ghost, disabled, style }) =>
     onPress={onPress}
     disabled={busy || disabled}
     activeOpacity={0.8}
+    accessibilityRole="button"
+    accessibilityLabel={label}
+    accessibilityState={{ disabled: !!(busy || disabled), busy: !!busy }}
     style={[
       styles.btn,
       ghost
-        ? { borderWidth: 1, borderColor: colors.border, backgroundColor: "transparent" }
+        ? { borderWidth: 1, borderColor: colors.border, backgroundColor: "transparent", opacity: disabled ? 0.5 : 1 }
         : { backgroundColor: colors.primary, opacity: disabled ? 0.5 : 1 },
       style,
     ]}
@@ -90,6 +93,10 @@ const KIND_ICON = {
   partner: "chatbubble-ellipses-outline",
   nudge: "water-outline",
   special: "gift-outline",
+  milestone: "ribbon-outline", // mốc ngày bên nhau
+  weekly: "newspaper-outline", // bản tin tuần của cặp đôi
+  save: "heart-circle-outline", // được người kia gánh chuỗi
+  together: "calendar-outline", // đề xuất / xác nhận ngày bên nhau
 };
 
 const InboxCard = memo(function InboxCard({ colors, api }) {

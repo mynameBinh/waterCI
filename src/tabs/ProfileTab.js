@@ -30,7 +30,7 @@ import {
   uploadAvatar,
   useAvatarUri,
 } from "../components/Avatar";
-import { CoupleSheetBody, useCouple } from "../components/agent/CoupleSheet";
+import { CoupleSheetBody, coupleHeartProps, useCouple } from "../components/agent/CoupleSheet";
 import { getAgentName } from "../context/aiAgents";
 import { getAiAvatar } from "../context/aiThemes";
 import { useTheme } from "../context/ThemeContext";
@@ -103,7 +103,7 @@ const SectionTag = ({ label, colors }) => (
 
 // Bảng chọn trượt từ dưới lên: chạm vùng tối bên ngoài, bấm X hoặc nút Back (Android) là đóng.
 // Không xổ nội dung trong trang nên không phải kéo màn hình để tìm lựa chọn.
-const PickerSheet = ({ visible, onClose, title, colors, children }) => {
+const PickerSheet = ({ visible, onClose, title, colors, children, tall = false }) => {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const [mounted, setMounted] = useState(visible);
@@ -163,7 +163,7 @@ const PickerSheet = ({ visible, onClose, title, colors, children }) => {
             {
               backgroundColor: colors.card,
               paddingBottom: Math.max(insets.bottom, 12) + 8,
-              maxHeight: height * 0.8,
+              ...(tall ? { height: height * 0.86 } : { maxHeight: height * 0.8 }),
               transform: [
                 {
                   translateY: anim.interpolate({
@@ -189,14 +189,19 @@ const PickerSheet = ({ visible, onClose, title, colors, children }) => {
               <Ionicons name="close" size={18} color={colors.textMuted} />
             </TouchableOpacity>
           </View>
-          <ScrollView
-            bounces={false}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.sheetBody}
-          >
-            {children}
-          </ScrollView>
+          {tall ? (
+            // `tall`: không bọc ScrollView — nội dung (tab, danh sách, kéo để làm mới) tự quản lý cuộn
+            <View style={styles.sheetBodyFlex}>{children}</View>
+          ) : (
+            <ScrollView
+              bounces={false}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.sheetBody}
+            >
+              {children}
+            </ScrollView>
+          )}
         </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
@@ -248,7 +253,7 @@ const ProfileTab = memo(function ProfileTab({
   }, []);
   const [coupleOpen, setCoupleOpen] = useState(false); // bảng "Cặp đôi"
   const coupleApi = useAgentApi(token, apiBase, authFetch);
-  const couple = useCouple(coupleApi, !!token);
+  const couple = useCouple(coupleApi, !!token, username);
 
   // ── Ảnh đại diện: lưu trên máy (hiện ở mọi nơi), đồng bộ lên server để người kia trong Cặp đôi thấy ──
   const myAvatarUri = useAvatarUri(username);
@@ -322,12 +327,6 @@ const ProfileTab = memo(function ProfileTab({
     [username, myAvatarUri, mySource, partnerSource],
   );
 
-  const coupleMood =
-    couple.c?.visible && couple.c?.partner
-      ? couple.c.me?.day_complete && couple.c.partner.day_complete
-        ? "happy"
-        : "calm"
-      : "flat";
   const coupleLinked = !!couple.c?.partner_username;
 
   return (
@@ -444,15 +443,18 @@ const ProfileTab = memo(function ProfileTab({
           <Ionicons name="chevron-forward" size={16} color={colors.primaryText} />
         </View>
         {coupleLinked ? (
-          <CoupleHeart
-            colors={colors}
-            mood={coupleMood}
-            myName={username}
-            myUri={myAvatarUri}
-            mySource={myAvatarUri ? null : mySource}
-            partnerName={partnerName}
-            partnerSource={partnerSource}
-          />
+          <>
+            <CoupleHeart
+              colors={colors}
+              partnerName={partnerName}
+              {...coupleHeartProps(couple.c, colors, couple.heart)}
+            />
+            {couple.c?.linked && couple.c?.together_days > 0 && (
+              <Text style={[styles.coupleDays, { color: colors.primaryText }]}>
+                Ngày thứ {couple.c.together_days} bên nhau
+              </Text>
+            )}
+          </>
         ) : (
           <Text style={[styles.coupleHint, { color: colors.textMuted }]}>
             {couple.summary === "Chưa liên kết"
@@ -466,6 +468,7 @@ const ProfileTab = memo(function ProfileTab({
         onClose={() => setCoupleOpen(false)}
         title="Cặp đôi"
         colors={colors}
+        tall
       >
         <CoupleSheetBody colors={colors} couple={couple} avatars={coupleAvatars} />
       </PickerSheet>
@@ -852,6 +855,7 @@ const styles = StyleSheet.create({
   coupleStreakRow: { flexDirection: "row", alignItems: "center", flexShrink: 1 },
   coupleSummary: { fontSize: 13, fontWeight: "700", marginRight: 6, flexShrink: 1 },
   coupleHint: { fontSize: 13, lineHeight: 19, marginBottom: 2 },
+  coupleDays: { fontSize: 13, fontWeight: "700", textAlign: "center", marginTop: 2 },
   compactCard: { paddingVertical: 4, paddingHorizontal: 16 },
   compactRow: {
     flexDirection: "row",
@@ -985,6 +989,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   sheetBody: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 8 },
+  sheetBodyFlex: { flex: 1, paddingHorizontal: 20, paddingTop: 6 },
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
