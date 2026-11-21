@@ -1,30 +1,23 @@
 // =============================================================================
-// CoupleHeartCatalog — danh mục tuỳ biến nhịp tim (sóng / màu / khung) + vẽ đường sóng.
-// Số "mở khoá ở chuỗi N ngày" PHẢI khớp assistant/logic.py (HEART_WAVES / HEART_COLORS / HEART_FRAMES): server là nơi
-// kiểm tra cuối cùng (PUT /api/couple/heart trả 422 nếu chưa mở khoá), file này chỉ để hiển thị.
+// CoupleHeartCatalog — danh mục tuỳ biến nhịp tim (sóng / màu) + vẽ đường sóng.
+// Tất cả mở sẵn (không còn mở khoá theo chuỗi). Server (assistant/logic.py: HEART_WAVES / HEART_COLORS) vẫn kiểm tra khoá hợp lệ
+// ở PUT /api/couple/heart nên danh sách key ở đây PHẢI khớp. Khung quanh cá đã bỏ (field `frame` vẫn được giữ nguyên khi lưu).
 // =============================================================================
 export const HEART_WAVES = [
-  { key: "ecg", label: "Nhịp tim", unlock: 0 },
-  { key: "sine", label: "Sóng mượt", unlock: 7 },
-  { key: "zigzag", label: "Răng cưa", unlock: 30 },
-  { key: "love", label: "Chuỗi trái tim", unlock: 100 },
+  { key: "ecg", label: "Nhịp tim" },
+  { key: "sine", label: "Sóng mượt" },
+  { key: "zigzag", label: "Răng cưa" },
+  { key: "love", label: "Chuỗi trái tim" },
 ];
 
 // color: null = theo màu chủ đạo của app (accent) đang chọn
 export const HEART_COLORS = [
-  { key: "accent", label: "Theo màu app", color: null, unlock: 0 },
-  { key: "rose", label: "Hồng đào", color: "#f43f5e", unlock: 7 },
-  { key: "sky", label: "Trời xanh", color: "#38bdf8", unlock: 7 },
-  { key: "mint", label: "Bạc hà", color: "#34d399", unlock: 30 },
-  { key: "violet", label: "Tím mộng", color: "#a78bfa", unlock: 100 },
-  { key: "gold", label: "Vàng nắng", color: "#eab308", unlock: 365 },
-];
-
-export const HEART_FRAMES = [
-  { key: "ring", label: "Viền đơn", unlock: 0 },
-  { key: "double", label: "Viền đôi", unlock: 30 },
-  { key: "dashed", label: "Viền chấm", unlock: 100 },
-  { key: "glow", label: "Toả sáng", unlock: 365 },
+  { key: "accent", label: "Theo màu app", color: null },
+  { key: "rose", label: "Hồng đào", color: "#f43f5e" },
+  { key: "sky", label: "Trời xanh", color: "#38bdf8" },
+  { key: "mint", label: "Bạc hà", color: "#34d399" },
+  { key: "violet", label: "Tím mộng", color: "#a78bfa" },
+  { key: "gold", label: "Vàng nắng", color: "#eab308" },
 ];
 
 export const DEFAULT_HEART = { wave: "ecg", color: "accent", frame: "ring", share: false };

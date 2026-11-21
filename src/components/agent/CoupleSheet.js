@@ -2,6 +2,8 @@
 // CoupleSheet — chức năng "Cặp đôi" cho tab "Tôi":
 //   - useCouple(api, enabled, username): tải / làm mới trạng thái liên kết + các hành động (liên kết, huỷ liên kết, chia sẻ,
 //     trả lời câu hỏi, lưu kiểu nhịp tim) + `run(fn)` để các tab chạy hành động riêng (đặt busy / báo lỗi / tải lại trạng thái).
+//   - Câu hỏi hôm nay đã chuyển sang tab "Nhật ký" (thẻ "hôm nay" ở đầu). Tab "Hôm nay" = tim đôi + "Giữ chuỗi hôm nay"
+//     (việc còn lại của mỗi người, lời nhắn ấm áp, không so hơn thua).
 //   - CoupleSheetBody: nội dung bảng trượt (đặt trong PickerSheet `tall` của ProfileTab). Chưa liên kết -> màn liên kết (CoupleLink);
 //     đã liên kết -> 4 tab: "Hôm nay" · "Nhật ký" (CoupleDiary) · "Kỷ niệm" (CoupleMemories) · "Tuỳ chỉnh" (CoupleSettings).
 //   - coupleHeartProps(c, colors, heart): gom props cho <CoupleHeart> (dùng cả ở thẻ Cặp đôi trong ProfileTab).
@@ -10,8 +12,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Ionicons } from "@expo/vector-icons";
 import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { Btn, Input, useRefreshOnActive } from "./AgentHomeCards";
+import { Btn, useRefreshOnActive } from "./AgentHomeCards";
 import { DiaryTab, Skeleton, useDiary } from "./CoupleDiary";
 import CoupleHeart from "./CoupleHeart";
 import { colorOf, DEFAULT_HEART } from "./CoupleHeartCatalog";
@@ -21,6 +24,7 @@ import { SettingsTab } from "./CoupleSettings";
 import FlameStreak from "./FlameStreak";
 
 const HEART_KEY = (u) => `couple_heart:${u}`;
+const STATUS_KEY = (u) => `couple_status:${u}`; // bản /api/couple/status gần nhất: mở app là hiện ngay, tải mới chạy ngầm
 
 export function useCouple(api, enabled = true, username = null) {
   const [c, setC] = useState(null);
@@ -42,6 +46,11 @@ export function useCouple(api, enabled = true, username = null) {
         if (v && mounted.current) setLocalHeart(JSON.parse(v));
       })
       .catch(() => {});
+    AsyncStorage.getItem(STATUS_KEY(username))
+      .then((v) => {
+        if (v && mounted.current) setC((prev) => prev || JSON.parse(v));
+      })
+      .catch(() => {});
   }, [username]);
 
   const load = useCallback(async () => {
@@ -51,11 +60,12 @@ export function useCouple(api, enabled = true, username = null) {
       if (mounted.current) {
         setC(r);
         setFailed(false);
+        if (username) AsyncStorage.setItem(STATUS_KEY(username), JSON.stringify(r)).catch(() => {});
       }
     } catch {
       if (mounted.current) setFailed(true); // giữ nguyên dữ liệu cũ nếu có
     }
-  }, [api, enabled]);
+  }, [api, enabled, username]);
   useRefreshOnActive(load);
 
   // Chạy một hành động rồi tải lại trạng thái; trả về true nếu thành công
@@ -120,8 +130,8 @@ export function coupleHeartProps(c, colors, heart) {
     streak: visible ? c.joint_streak || 0 : 0, // 0 khi người dùng tắt chuỗi chung -> không hiện ngọn lửa
     waveStyle: h.wave || "ecg",
     pulseColor: colorOf(h.color || "accent", colors.primary),
-    frameStyle: h.frame || "ring",
-    partnerFrameStyle: c?.partner_heart?.frame,
+    partnerAccent: c?.partner_theme?.accent || undefined, // màu + AI-agent người kia đang dùng -> cá của họ đổi màu theo
+    partnerAiTheme: c?.partner_theme?.ai_theme || undefined,
   };
 }
 
@@ -153,58 +163,113 @@ const TabBar = ({ colors, value, onChange, badges }) => (
   </View>
 );
 
-const TodayTab = ({ colors, couple, refreshControl }) => {
-  const { c, busy, err, sendAnswer, heart } = couple;
-  const [answer, setAnswer] = useState("");
-  const p = c.partner;
-  const pct = p ? Math.min(100, Math.round((p.water_ml / Math.max(1, p.water_goal)) * 100)) : 0;
-  const status = p?.day_complete ? " · xong hôm nay" : p?.pending_tasks ? ` · còn ${p.pending_tasks} việc` : "";
-  const hp = coupleHeartProps(c, colors, heart);
-  const caption = hp.bothDone ? "Cả hai đã xong hôm nay 💗" : hp.mood === "calm" ? "" : "Chưa xem được nhịp của nhau";
+const prog = (x) => (typeof x?.progress === "number" ? x.progress : x?.day_complete ? 1 : 0);
+
+// Việc còn lại của một người. Dùng thêm me.pending_tasks / pending_list nếu server có; không thì suy ra từ số nước.
+const leftLines = (st) => {
+  if (!st || st.day_complete) return [];
+  const out = [];
+  const left = Math.max(0, (st.water_goal || 0) - (st.water_ml || 0));
+  if (left > 0) out.push({ icon: "water-outline", text: `Còn ${left} ml nước` });
+  const n = typeof st.pending_tasks === "number" ? st.pending_tasks : null;
+  if (Array.isArray(st.pending_list) && st.pending_list.length) {
+    st.pending_list.slice(0, 4).forEach((t) =>
+      out.push({ icon: "checkbox-outline", text: typeof t === "string" ? t : [t.title, t.detail].filter(Boolean).join(" · ") }));
+  } else if (n > 0) {
+    out.push({ icon: "list-outline", text: `Còn ${n} việc trong Mục tiêu` });
+  } else if (left === 0) {
+    out.push({ icon: "list-outline", text: "Còn vài việc nhỏ trong Mục tiêu" });
+  }
+  return out;
+};
+
+const PersonRow = ({ colors, name, st, dim }) => {
+  const done = !!st?.day_complete;
+  const pct = Math.round(Math.min(1, Math.max(0, prog(st))) * 100);
+  const lines = leftLines(st);
   return (
-    <ScrollView refreshControl={refreshControl} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled"
-      contentContainerStyle={styles.content}>
-      <CoupleHeart colors={colors} partnerName={c.partner_username} {...hp} />
-      {!!caption && <Text style={[styles.caption, { color: colors.textMuted }]}>{caption}</Text>}
-      <View style={[styles.panel, { backgroundColor: colors.background }]}>
-        <View style={styles.panelHead}>
-          <Text style={[styles.panelTitle, { color: colors.text }]} numberOfLines={1}>{p?.name || c.partner_username}</Text>
-          {c.visible && c.joint_streak > 0 && <FlameStreak count={c.joint_streak} size={14} label="ngày chung" style={{ marginLeft: 8 }} />}
-        </View>
-        {c.visible && p ? (
-          <>
-            <Text style={[styles.msg, { color: colors.text }]}>{p.water_ml}/{p.water_goal} ml{status}</Text>
-            <View style={[styles.bar, { backgroundColor: colors.border }]}>
-              <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: colors.primary }]} />
-            </View>
-          </>
+    <View style={[styles.person, dim && { opacity: 0.85 }]}>
+      <View style={styles.personHead}>
+        <Text style={[styles.personName, { color: colors.text }]} numberOfLines={1}>{name}</Text>
+        {done ? (
+          <View style={styles.donePill}>
+            <Ionicons name="checkmark-circle" size={15} color={colors.primary} />
+            <Text style={[styles.doneText, { color: colors.primaryText }]}>Xong hôm nay</Text>
+          </View>
         ) : (
-          <Text style={[styles.msg, { color: colors.textMuted }]}>Chưa xem được tiến độ của nhau (cần cả hai bật chia sẻ).</Text>
+          <Text style={[styles.pct, { color: colors.textMuted }]}>{pct}%</Text>
         )}
       </View>
+      <View style={[styles.bar, { backgroundColor: colors.border }]}>
+        <View style={[styles.barFill, { width: `${done ? 100 : pct}%`, backgroundColor: colors.primary }]} />
+      </View>
+      {lines.map((l, i) => (
+        <View key={i} style={styles.leftRow}>
+          <Ionicons name={l.icon} size={14} color={colors.textMuted} />
+          <Text style={[styles.leftText, { color: colors.text }]}>{l.text}</Text>
+        </View>
+      ))}
+    </View>
+  );
+};
 
-      {!!c.question && (
-        <View style={[styles.panel, { backgroundColor: colors.background }]}>
-          <Text style={[styles.q, { color: colors.text }]}>Câu hỏi hôm nay: {c.question}</Text>
-          {c.my_answer ? (
-            <>
-              <Text style={[styles.msg, { color: colors.text }]}>Bạn: {c.my_answer}</Text>
-              <Text style={[styles.msg, { color: c.partner_answer ? colors.text : colors.textMuted }]}>
-                {c.partner_answer ? `${c.partner_username}: ${c.partner_answer}` : `${c.partner_username} chưa trả lời.`}
-              </Text>
-              {!!c.my_answer_locked && <Text style={[styles.hint, { color: colors.textMuted }]}>Cả hai đã trả lời nên câu trả lời được giữ nguyên.</Text>}
-            </>
-          ) : (
-            <View style={styles.formRow}>
-              <Input colors={colors} value={answer} onChangeText={setAnswer} multiline maxLength={800}
-                placeholder="Trả lời của bạn (người kia chỉ thấy sau khi cũng trả lời)"
-                style={{ flex: 1, maxHeight: 90, backgroundColor: colors.card }} accessibilityLabel="Trả lời câu hỏi hôm nay" />
-              <Btn colors={colors} label="Gửi" busy={busy}
-                onPress={async () => { if (await sendAnswer(answer)) { setAnswer(""); try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch { /* bỏ qua */ } } }}
-                disabled={!answer.trim()} />
-            </View>
+const TodayTab = ({ colors, couple, refreshControl, onOpenDiary }) => {
+  const { c, err, heart } = couple;
+  const p = c.partner;
+  const hp = coupleHeartProps(c, colors, heart);
+  const settings = c.settings || { streak_enabled: true };
+  const streakOn = !!c.visible && settings.streak_enabled !== false;
+  const meDone = !!c.me?.day_complete;
+  const pDone = !!p?.day_complete;
+  const pName = c.partner_username;
+
+  // lời nhắn ấm áp, không so hơn thua
+  let headline = "Chưa xem được nhịp của nhau";
+  let sub = "Cần cả hai bật chia sẻ tiến độ để cùng thấy nhau.";
+  if (c.visible && p) {
+    if (hp.bothDone) {
+      headline = streakOn && c.joint_streak > 0 ? `Hai bạn đã giữ chuỗi ${c.joint_streak} ngày` : "Cả hai đã xong hôm nay";
+      sub = "Hôm nay thế là trọn vẹn rồi, nghỉ ngơi nhé.";
+    } else if (meDone) {
+      headline = "Phần của bạn xong rồi";
+      sub = `${pName} xong nữa là hai bạn cùng về đích. Cứ thong thả nhé.`;
+    } else if (pDone) {
+      headline = `${pName} đã xong phần của bạn ấy`;
+      sub = streakOn ? "Bạn hoàn thành nốt phần mình là giữ được chuỗi chung." : "Bạn hoàn thành nốt phần mình nhé.";
+    } else {
+      headline = streakOn ? "Cùng nhau giữ chuỗi hôm nay" : "Tiến độ hôm nay của hai bạn";
+      sub = "Mỗi người làm xong phần của mình thì hai bạn cùng chạm tới trái tim.";
+    }
+  }
+  const askPending = !!c.question && !c.my_answer;
+
+  return (
+    <ScrollView refreshControl={refreshControl} showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+      <CoupleHeart colors={colors} partnerName={pName} {...hp} />
+      <View style={[styles.panel, { backgroundColor: colors.background }]}>
+        <View style={styles.panelHead}>
+          <Text style={[styles.panelTitle, { color: colors.text }]} numberOfLines={1}>{headline}</Text>
+          {streakOn && c.joint_streak > 0 && (
+            <FlameStreak count={c.joint_streak} size={14} label="ngày chung" labelColor={colors.textMuted} style={{ marginLeft: 8 }} />
           )}
         </View>
+        <Text style={[styles.msg, { color: colors.textMuted }]}>{sub}</Text>
+        {c.visible && p ? (
+          <View style={styles.people}>
+            <PersonRow colors={colors} name="Bạn" st={c.me} />
+            <View style={[styles.sep, { backgroundColor: colors.border }]} />
+            <PersonRow colors={colors} name={p.name || pName} st={p} />
+          </View>
+        ) : null}
+      </View>
+
+      {askPending && (
+        <TouchableOpacity activeOpacity={0.85} onPress={onOpenDiary} accessibilityRole="button" accessibilityLabel="Mở nhật ký để trả lời câu hỏi hôm nay"
+          style={[styles.ask, { backgroundColor: colors.primarySoft, borderColor: colors.primaryBorder }]}>
+          <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.primary} />
+          <Text style={[styles.msg, { color: colors.text, flex: 1 }]}>Câu hỏi hôm nay đang chờ bạn ở Nhật ký.</Text>
+          <Ionicons name="chevron-forward" size={16} color={colors.primaryText} />
+        </TouchableOpacity>
       )}
       {!!err && <Text style={[styles.msg, { color: "#d64545", marginTop: 8 }]}>{err}</Text>}
     </ScrollView>
@@ -263,7 +328,12 @@ export const CoupleSheetBody = ({ colors, couple, avatars = {} }) => {
     );
   }
 
-  const badges = { today: couple.needsAttention, memories: couple.memoriesAttention };
+  const badges = { diary: couple.needsAttention, memories: couple.memoriesAttention };
+  const answer = async (text) => {
+    const ok = await couple.sendAnswer(text);
+    if (ok) diary.reload();
+    return ok;
+  };
   return (
     <View style={styles.flex}>
       {failed && (
@@ -275,8 +345,11 @@ export const CoupleSheetBody = ({ colors, couple, avatars = {} }) => {
       )}
       <TabBar colors={colors} value={tab} onChange={setTab} badges={badges} />
       <View style={styles.flex}>
-        {tab === "today" && <TodayTab colors={colors} couple={couple} refreshControl={refreshControl} />}
-        {tab === "diary" && <DiaryTab colors={colors} diary={diary} avatars={avatars} partnerName={c.partner_username} refreshControl={refreshControl} />}
+        {tab === "today" && <TodayTab colors={colors} couple={couple} refreshControl={refreshControl} onOpenDiary={() => setTab("diary")} />}
+        {tab === "diary" && (
+          <DiaryTab colors={colors} diary={diary} avatars={avatars} partnerName={c.partner_username} refreshControl={refreshControl}
+            todayInfo={{ question: c.question, my_answer: c.my_answer, partner_answer: c.partner_answer }} onAnswer={answer} answerErr={couple.err} />
+        )}
         {tab === "memories" && (
           <MemoriesTab colors={colors} couple={couple} together={together} weekly={weekly} avatars={avatars} partnerName={c.partner_username}
             refreshControl={refreshControl} />
@@ -295,10 +368,18 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 16 },
   msg: { fontSize: 13, lineHeight: 19 },
   hint: { fontSize: 12, lineHeight: 17, marginTop: 6 },
-  caption: { fontSize: 12.5, fontWeight: "600", textAlign: "center", marginBottom: 6 },
-  q: { fontSize: 13.5, fontWeight: "600", marginBottom: 6 },
   link: { fontSize: 12.5, fontWeight: "700" },
-  formRow: { flexDirection: "row", gap: 8, alignItems: "flex-end", marginTop: 10 },
+  people: { marginTop: 12 },
+  person: { paddingVertical: 4 },
+  personHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
+  personName: { flex: 1, fontSize: 13.5, fontWeight: "700", marginRight: 8 },
+  donePill: { flexDirection: "row", alignItems: "center", gap: 4 },
+  doneText: { fontSize: 12.5, fontWeight: "700" },
+  pct: { fontSize: 12.5, fontWeight: "700" },
+  leftRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+  leftText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  sep: { height: StyleSheet.hairlineWidth, marginVertical: 10 },
+  ask: { flexDirection: "row", alignItems: "center", gap: 10, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginTop: 6 },
   fullBtn: { width: "100%", marginTop: 12 },
   panel: { borderRadius: 14, padding: 14, marginBottom: 4, marginTop: 8 },
   panelHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 },

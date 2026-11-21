@@ -1,5 +1,5 @@
 // FlameStreak — icon ngọn lửa + số ngày, dùng cho chuỗi chung của Cặp đôi (giống kiểu streak cá nhân).
-//   <FlameStreak count={12} size={14} label="ngày chung" />   -> ngọn lửa nhỏ + số bên cạnh (dạng một dòng)
+//   <FlameStreak count={12} size={14} label="ngày chung" labelColor={colors.textMuted} /> -> ngọn lửa nhỏ + số bên cạnh (dạng một dòng)
 //   <FlameStreak count={12} size={40} inside />                -> ngọn lửa lớn, số nằm TRONG ngọn lửa (dùng ở giữa CoupleHeart)
 import { Ionicons } from "@expo/vector-icons";
 import { memo } from "react";
@@ -7,7 +7,7 @@ import { StyleSheet, Text, View } from "react-native";
 
 export const FLAME = "#ff7a1a";
 
-const FlameStreak = memo(function FlameStreak({ count, size = 16, label, style, inside = false }) {
+const FlameStreak = memo(function FlameStreak({ count, size = 16, label, labelColor, style, inside = false }) {
   if (inside) {
     // `size` = chiều rộng ngọn lửa; số căn giữa, hơi thấp hơn tâm vì thân ngọn lửa phình ở phần dưới
     const digits = String(count).length;
@@ -25,7 +25,7 @@ const FlameStreak = memo(function FlameStreak({ count, size = 16, label, style, 
     <View style={[styles.row, style]} accessibilityLabel={`Chuỗi chung ${count} ngày`}>
       <Ionicons name="flame" size={size + 2} color={FLAME} />
       <Text style={[styles.num, { fontSize: size, color: FLAME }]}>{count}</Text>
-      {!!label && <Text style={[styles.label, { fontSize: size - 2 }]}>{label}</Text>}
+      {!!label && <Text style={[styles.label, { fontSize: size - 2, color: labelColor || FLAME }]}>{label}</Text>}
     </View>
   );
 });

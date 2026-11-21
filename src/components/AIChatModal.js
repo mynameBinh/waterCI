@@ -3753,7 +3753,6 @@ const AIChatModal = memo(function AIChatModal({
           : null;
       const showConfirm =
         !mine && !item.isError && !item.fresh && isLastMsg && !sending && !!item.content && GCONFIRM_RE.test(item.content);
-      const gl = mine && item.content ? googleLinks(item.content) : { urls: [], instruction: "" };
       const nextQs =
         !mine &&
         !item.isError &&
@@ -4147,31 +4146,6 @@ const AIChatModal = memo(function AIChatModal({
             {choicesData && (
               <ChoiceButtons choices={choicesData} colors={colors} onPick={(o) => send(o)} />
             )}
-            {showConfirm && (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() => send("Xác nhận")}
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 8,
-                  alignSelf: "stretch",
-                  marginTop: 10,
-                  paddingVertical: 12,
-                  borderRadius: 12,
-                  backgroundColor: colors.primary,
-                }}
-              >
-                <Ionicons name="checkmark-circle" size={18} color={colors.primaryText || "#fff"} />
-                <Text style={{ color: colors.primaryText || "#fff", fontSize: 14.5, fontWeight: "700" }}>
-                  Xác nhận thay đổi
-                </Text>
-              </TouchableOpacity>
-            )}
-            {gl.urls.map((u) => (
-              <GoogleDocCard key={u} url={u} instruction={gl.instruction} colors={colors} ctx={exportCtx} compact />
-            ))}
             {nextQs.length > 0 && (
               <View style={styles.nextWrap}>
                 {nextQs.map((q) => (

@@ -3,6 +3,7 @@ import * as Haptics from "expo-haptics";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
+  Easing,
   Image,
   PanResponder,
   StyleSheet,
@@ -28,6 +29,8 @@ import { AVATAR_NATIVE_FACING, useAiAvatar } from "./AIChatModal";
 //    Tắt bằng cách đặt bubble = null (hoặc nghe onBubbleClose).
 //  • BAY VÀO "GHẾ" KHI QUÉT: truyền prop `dockTarget={{ x, y, size }}` (tâm + đường kính huy hiệu trên ScanningOverlay)
 //    -> nút bay tới đó (phóng to vừa huy hiệu, ẩn khỏi thao tác chạm). Đặt dockTarget = null -> bay về chỗ cũ.
+//  • "HOÁ THÀNH CÁ": dockTarget có thêm `handoff: true` (chỗ cá "Bạn" ở tab Tôi) -> bay tới bằng timing (biết chính xác lúc tới nơi),
+//    tới nơi gọi onDockSettle(true) rồi tự mờ đi để nơi vẽ cá hiện cá thế chỗ (cá có nhấp nhô, núp sau sóng). Rời chỗ -> hiện lại + onDockSettle(false).
 
 const SIZE = 56; // kích thước nút
 const MARGIN = 8; // khoảng cách tới mép màn hình
@@ -45,6 +48,10 @@ const HI_RES = 2;
 const PRESS_FX = false;
 // Khi bay vào huy hiệu quét / lưu check-in: false = giữ nguyên kích thước nút (chỉ bay tới, không phóng to) -> ảnh không mờ.
 const DOCK_SCALE = false;
+// Chuyển giao nút -> cá "Bạn": cá hiện đủ (nằm sau nút, cùng cỡ) rồi nút mới mờ đi. Số này = thời gian chờ trước khi nút bắt đầu mờ;
+// phải >= thời gian cá hiện dần (CoupleHeart: MINE_FADE_IN) để hai bên không cùng bán trong suốt (nhấp nháy).
+const HANDOFF_FADE_DELAY = 200;
+const HANDOFF_FADE_MS = 180;
 
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 const snapPx = (v) => Math.round(v * PixelRatio.get()) / PixelRatio.get(); // làm tròn theo pixel thật -> ảnh không bị nội suy lệch nửa pixel khi kéo
@@ -83,7 +90,8 @@ const FloatingAIButton = memo(function FloatingAIButton({
   bottomInset = 96, // vùng dock phía dưới cần tránh (chưa gồm safe-area)
   bubble = null, // { id, text, meta? } -> bong bóng tin nhắn từ AI
   onBubbleClose,
-  dockTarget = null, // { x, y, size } | null -> bay tới huy hiệu của ScanningOverlay
+  dockTarget = null, // { x, y, size, face?, handoff? } | null -> bay tới huy hiệu của ScanningOverlay
+  onDockSettle, // (boolean) -> chỉ với dockTarget.handoff: true = nút đã tới nơi và mờ đi (cá thế chỗ), false = nút hiện lại để rời đi
   hidden = false, // true -> nút thu nhỏ + mờ đi (khi khung chat đang mở), false -> bật lại có hiệu ứng nảy
   badge = false, // true -> chấm đỏ ở góc nút: còn check-in bị từ chối đang chờ giải thích (bong bóng đã tắt vẫn bấm vào nút được)
 }) {
@@ -134,13 +142,16 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const [side, setSide] = useState("right"); // bản state của sideRef (để bong bóng đổi bên)
   // Lật ngang ảnh để agent luôn quay đầu VÀO phía trong màn hình (1 = giữ nguyên, -1 = lật). Xoay mượt qua 0 như "quay đầu".
   const flip = useRef(new Animated.Value(side === AVATAR_NATIVE_FACING ? -1 : 1)).current;
+  // dockTarget.face ("right" | "left") = hướng nhìn khi đứng ở "ghế" (vd. thế chỗ cá "Bạn" nhìn sang phải); không có -> quay đầu vào trong màn hình như thường
+  const dockFace = dockTarget?.face;
+  const faceSide = dockFace === "right" ? "left" : dockFace === "left" ? "right" : side;
   useEffect(() => {
     Animated.timing(flip, {
-      toValue: side === AVATAR_NATIVE_FACING ? -1 : 1,
+      toValue: faceSide === AVATAR_NATIVE_FACING ? -1 : 1,
       duration: 220,
       useNativeDriver: false,
     }).start();
-  }, [side, flip]);
+  }, [faceSide, flip]);
   const yRatioRef = useRef(null); // 0..1 trong khoảng minY..maxY (để thích ứng khi đổi kích thước màn hình)
   const idleTimer = useRef(null);
   const loadedRef = useRef(false);
@@ -154,6 +165,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
       y.removeListener(iy);
       clearTimeout(idleTimer.current);
       clearTimeout(returnTimer.current);
+      clearTimeout(fadeTimer.current);
     };
   }, [x, y]);
 
@@ -258,9 +270,22 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const dockX = dockTarget?.x;
   const dockY = dockTarget?.y;
   const dockSize = dockTarget?.size;
+  const dockHandoff = !!dockTarget?.handoff;
+  const settledRef = useRef(false); // đã tới ghế handoff và mờ đi (cá đang thế chỗ)
+  const fadeTimer = useRef(null); // chờ cá "Bạn" hiện đủ rồi mới mờ nút
+  const handoffFade = useRef(new Animated.Value(1)).current; // 1 = nút hiện, 0 = đã nhường chỗ cho cá
+  const onDockSettleRef = useRef(onDockSettle);
+  onDockSettleRef.current = onDockSettle;
 
   useEffect(() => {
     const b = boundsRef.current;
+    clearTimeout(fadeTimer.current); // huỷ lần mờ nút đang chờ (bay lại / rời ghế)
+    // đang nhường chỗ cho cá mà ghế đổi / biến mất -> hiện nút lại, báo nơi vẽ cá mờ cá đi
+    if (settledRef.current && !dockHandoff) {
+      settledRef.current = false;
+      onDockSettleRef.current?.(false);
+      Animated.timing(handoffFade, { toValue: 1, duration: 140, useNativeDriver: false }).start();
+    }
     if (dockX != null && dockY != null) {
       clearTimeout(returnTimer.current);
       if (!dockedRef.current) {
@@ -272,16 +297,29 @@ const FloatingAIButton = memo(function FloatingAIButton({
         wake();
         clearTimeout(idleTimer.current);
       }
-      Animated.parallel([
-        Animated.spring(x, { toValue: dockX - SIZE / 2, useNativeDriver: false, friction: 8, tension: 55 }),
-        Animated.spring(y, { toValue: dockY - SIZE / 2, useNativeDriver: false, friction: 8, tension: 55 }),
-        Animated.spring(dockScale, {
-          toValue: DOCK_SCALE && dockSize ? dockSize / SIZE : 1,
-          useNativeDriver: false,
-          friction: 7,
-          tension: 70,
-        }),
-      ]).start();
+      const scaleTo = DOCK_SCALE && dockSize ? dockSize / SIZE : 1; // handoff: KHÔNG phóng to nút khi bay (cá tự lớn dần lúc hiện ra)
+      if (dockHandoff) {
+        const fly = { duration: 440, easing: Easing.out(Easing.cubic), useNativeDriver: false };
+        Animated.parallel([
+          Animated.timing(x, { toValue: dockX - SIZE / 2, ...fly }),
+          Animated.timing(y, { toValue: dockY - SIZE / 2, ...fly }),
+          // KHÔNG đụng tới dockScale: nút giữ nguyên cỡ suốt chuyến bay
+        ]).start(({ finished }) => {
+          if (!finished || !dockedRef.current) return; // bị ngắt (ghế đổi / rời tab) -> không nhập hình
+          settledRef.current = true;
+          onDockSettleRef.current?.(true); // -> cá "Bạn" bắt đầu hiện (nằm sau nút, nút vẫn đặc 100%)
+          fadeTimer.current = setTimeout(() => {
+            if (!settledRef.current) return;
+            Animated.timing(handoffFade, { toValue: 0, duration: HANDOFF_FADE_MS, useNativeDriver: false }).start();
+          }, HANDOFF_FADE_DELAY);
+        });
+      } else {
+        Animated.parallel([
+          Animated.spring(x, { toValue: dockX - SIZE / 2, useNativeDriver: false, friction: 8, tension: 55 }),
+          Animated.spring(y, { toValue: dockY - SIZE / 2, useNativeDriver: false, friction: 8, tension: 55 }),
+          Animated.spring(dockScale, { toValue: scaleTo, useNativeDriver: false, friction: 7, tension: 70 }),
+        ]).start();
+      }
     } else if (dockedRef.current) {
       clearTimeout(returnTimer.current);
       returnTimer.current = setTimeout(() => {
@@ -303,7 +341,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
       }, 180);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dockX, dockY, dockSize]);
+  }, [dockX, dockY, dockSize, dockHandoff]);
 
   // ── Bong bóng tin nhắn ──────────────────────────────────────────────────
   const bAnim = useRef(new Animated.Value(0)).current;
@@ -458,7 +496,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
         docked && styles.fabDocked, // nổi trên cả ScanningOverlay (zIndex 1000)
         transparentFab && styles.fabTransparent,
         {
-          opacity: Animated.multiply(opacity, hide.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })),
+          opacity: Animated.multiply(Animated.multiply(opacity, handoffFade), hide.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })),
           transform: [
             { translateX: x },
             { translateY: y },

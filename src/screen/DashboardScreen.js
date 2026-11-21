@@ -140,6 +140,7 @@ export default function DashboardScreen({ token, onLogout }) {
 
   // ── State ─────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState("home");
+  const [coupleSync, setCoupleSync] = useState(0); // tăng mỗi lần check-in thành công -> tab Cặp đôi tải lại tiến độ của hai người
   // ── Hiệu ứng chuyển tab: fade + trượt nhẹ mỗi khi activeTab đổi ──────────
   const tabFadeAnim = useRef(new Animated.Value(1)).current;
   const tabSlideAnim = useRef(new Animated.Value(0)).current;
@@ -193,6 +194,17 @@ export default function DashboardScreen({ token, onLogout }) {
   const [chatOrigin, setChatOrigin] = useState(null); // tâm nút AI lúc bấm -> chat bung ra từ đó
   // Chỗ "ghế" phía trên thẻ chọn dung tích -> nút AI đứng đó trong lúc chọn ml
   const [volumeTarget, setVolumeTarget] = useState(null);
+  // Chỗ con cá "Bạn" ở thẻ Cặp đôi (tab Tôi) -> nút AI nổi bay tới thế chỗ khi tab Tôi đã tải xong
+  const [profileSeat, setProfileSeat] = useState(null);
+  const [aiSeated, setAiSeated] = useState(false); // nút AI đã tới ghế và nhường chỗ cho cá "Bạn" (FloatingAIButton báo qua onDockSettle)
+  const profileSeatRef = useRef(null);
+  const handleProfileSeat = useCallback((s) => {
+    const p = profileSeatRef.current;
+    if (!s && !p) return;
+    if (s && p && Math.abs(s.x - p.x) < 1 && Math.abs(s.y - p.y) < 1 && s.size === p.size) return;
+    profileSeatRef.current = s;
+    setProfileSeat(s);
+  }, []);
   // Bong bóng tin nhắn từ AI (hiện cạnh nút nổi) — thay cho Alert "thành công"
   const [aiBubble, setAiBubble] = useState(null);
   const pendingAiComment = useRef(""); // câu cảm thán AI trả về ở bước quét nước, dùng khi user xác nhận
@@ -968,6 +980,7 @@ export default function DashboardScreen({ token, onLogout }) {
         );
         fetchActiveTask(true);
         fetchStreak(); // task cuối cùng có thể vừa giữ được streak
+        setCoupleSync((n) => n + 1); // báo tab Cặp đôi tải lại tiến độ -> cá bơi theo
       } catch (err) {
         // Lý do AI từ chối nằm sau "Chưa đúng yêu cầu: " -> chỉ hiện lý do trong bong bóng
         const reason = friendlyScanError(err.message).replace(/^Chưa đúng yêu cầu:\s*/, "");
@@ -1109,6 +1122,7 @@ export default function DashboardScreen({ token, onLogout }) {
         pendingAiComment.current = "";
         pendingImageUrl.current = "";
         fetchStreak(); // đủ nước + xong mục tiêu -> streak tăng
+        setCoupleSync((n) => n + 1); // báo tab Cặp đôi tải lại tiến độ -> cá bơi theo
       } catch (err) {
         console.warn("[checkin/confirm] thất bại:", err.message);
         // khiếu nại hết hạn / đã được ghi nhận -> đóng luôn; lỗi khác (mạng, 422…) giữ lại để thử lại
@@ -1414,6 +1428,7 @@ export default function DashboardScreen({ token, onLogout }) {
     setChatOrigin(origin && typeof origin.x === "number" ? origin : null); // nơi khác gọi (không có toạ độ) -> bung từ góc dưới phải
     setShowAIChat(true);
   }, []);
+  const profileActive = activeTab === "profile";
   const profileTab = useMemo(
     () => (
     <ProfileTab
@@ -1428,9 +1443,17 @@ export default function DashboardScreen({ token, onLogout }) {
       token={token}
       apiBase={API_BASE}
       authFetch={authFetch}
+      active={profileActive}
+      coupleSync={coupleSync}
+      onAiSeat={handleProfileSeat}
+      aiSeated={aiSeated}
     />
     ),
     [
+      profileActive,
+      coupleSync,
+      handleProfileSeat,
+      aiSeated,
       username,
       memberTier,
       goalMl,
@@ -1555,13 +1578,18 @@ export default function DashboardScreen({ token, onLogout }) {
 
         {/* ── PROFILE TAB ── */}
         <Animated.View
+          // Tab Tôi KHÔNG dùng display:none khi ẩn: giữ nguyên layout (trong suốt, không chạm được) để ảnh nền/cá được dựng + giải mã sẵn
+          // và đo được ghế ngay -> mở tab là nút AI bay vào luôn, không phải chờ tải lại.
+          pointerEvents={activeTab === "profile" ? "auto" : "none"}
+          importantForAccessibility={activeTab === "profile" ? "auto" : "no-hide-descendants"}
+          accessibilityElementsHidden={activeTab !== "profile"}
           style={[
             {
               flex: 1,
               opacity: tabFadeAnim,
               transform: [{ translateY: tabSlideAnim }],
             },
-            activeTab !== "profile" && styles.hiddenTab,
+            activeTab !== "profile" && styles.hiddenTabKeepLayout,
           ]}
         >
           {profileTab}
@@ -1648,7 +1676,8 @@ export default function DashboardScreen({ token, onLogout }) {
         onPress={handleOpenAIChat}
         bubble={aiBubble}
         onBubbleClose={handleBubbleClose}
-        dockTarget={scanTarget || saveTarget || volumeTarget}
+        dockTarget={scanTarget || saveTarget || volumeTarget || (profileActive ? profileSeat : null)}
+        onDockSettle={setAiSeated}
         hidden={chatMounted}
         badge={!!appeal}
       />
@@ -2123,6 +2152,7 @@ const styles = StyleSheet.create({
   // với insets thực tế của từng máy Android thay vì số cố định.
   scrollContent: { paddingHorizontal: 16, paddingTop: 2, flex: 1 },
   hiddenTab: { display: "none" },
+  hiddenTabKeepLayout: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, opacity: 0, zIndex: -1 },
 
   // ── Header modal Nhắc nhở ──────────────────────────────────────────────
   notifModalHeader: {

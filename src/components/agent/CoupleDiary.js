@@ -4,6 +4,8 @@
 //   DiaryTab: giao diện (skeleton khi tải lần đầu, giữ dữ liệu cũ khi tải lại lỗi, avatar nhỏ cạnh mỗi dòng).
 // Mỗi ngày: câu hỏi hôm đó + câu trả lời của hai người (của người kia chỉ hiện sau khi mình đã trả lời —
 // server quyết định, app chỉ hiển thị) + ghi chú tự do (mỗi người tối đa một ghi chú / ngày, sửa/xoá được của mình).
+// "Hôm nay" nằm ở đầu nhật ký: câu hỏi hôm nay + ô trả lời (POST /api/couple/daily qua prop onAnswer) + ghi chú nhỏ.
+// Ngày cũ không có gì được thu gọn thành một dòng cho gọn.
 // Dùng ScrollView thường (không phải FlatList) chiếm hết khung tab; `refreshControl` (kéo để làm mới) do CoupleSheet truyền xuống.
 // =============================================================================
 import { Ionicons } from "@expo/vector-icons";
@@ -161,14 +163,14 @@ export const Skeleton = ({ colors }) => {
 };
 
 // ── một dòng: avatar nhỏ + tên + nội dung ──
-const Line = ({ colors, who, avatar, children, muted }) => (
+const Line = ({ colors, who, avatar, children }) => (
   <View style={styles.line}>
-    <Avatar name={who} size={24} ringColor={colors.primaryBorder} {...avatar} />
+    <Avatar name={who} size={26} ringColor={colors.primaryBorder} {...avatar} />
     <View style={styles.lineBody}>
       <Text style={[styles.who, { color: colors.textMuted }]} numberOfLines={1}>
         {who}
       </Text>
-      {children ?? null}
+      <View style={[styles.bubble, { backgroundColor: colors.card }]}>{children ?? null}</View>
     </View>
   </View>
 );
@@ -243,36 +245,78 @@ const Composer = ({ colors, busy, onAdd }) => {
   );
 };
 
-const DayCard = memo(function DayCard({ colors, day, avatars, partnerName, busy, onAdd, onEdit, onRemove }) {
+// Ô trả lời câu hỏi hôm nay (người kia chỉ thấy sau khi mình trả lời — server quyết định)
+const AnswerBox = ({ colors, busy, onAnswer, err }) => {
+  const [text, setText] = useState("");
+  const send = async () => {
+    if (await onAnswer(text.trim())) setText("");
+  };
+  return (
+    <View style={styles.composer}>
+      <View style={styles.formRow}>
+        <Input colors={colors} value={text} onChangeText={setText} multiline maxLength={MAX_NOTE}
+          placeholder="Viết câu trả lời của bạn…" style={{ flex: 1, maxHeight: 100, backgroundColor: colors.card }}
+          accessibilityLabel="Trả lời câu hỏi hôm nay" />
+        <Btn colors={colors} label="Gửi" onPress={send} busy={busy} disabled={!text.trim()} />
+      </View>
+      <Text style={[styles.counter, { color: colors.textMuted, textAlign: "left" }]}>
+        Bạn ấy sẽ xem được câu trả lời của bạn sau khi cũng trả lời.
+      </Text>
+      {!!err && <Text style={[styles.text, { color: "#d64545", marginTop: 6 }]}>{err}</Text>}
+    </View>
+  );
+};
+
+const DayCard = memo(function DayCard({ colors, day, avatars, partnerName, busy, onAdd, onEdit, onRemove, onAnswer, answerErr }) {
   const myAv = { uri: avatars.myUri, source: avatars.myUri ? null : avatars.mySource };
   const pAv = { source: avatars.partnerSource };
   const hasMyNote = day.notes.some((n) => n.mine);
+  const empty = !day.my_answer && !day.partner_answer && !day.partner_answered && !day.notes.length;
+
+  // Ngày cũ không có gì: thu gọn một dòng
+  if (!day.is_today && empty) {
+    return (
+      <View style={[styles.dayMini, { backgroundColor: colors.background }]}>
+        <Text style={[styles.miniLabel, { color: colors.textMuted }]}>{day.label}</Text>
+        <Text style={[styles.miniText, { color: colors.textMuted }]} numberOfLines={1}>Chưa có gì được ghi lại</Text>
+      </View>
+    );
+  }
 
   let partnerLine = null;
   if (day.partner_answer) {
     partnerLine = <Text style={[styles.text, { color: colors.text }]}>{day.partner_answer}</Text>;
   } else if (day.is_today && day.partner_answered) {
     partnerLine = (
-      <Text style={[styles.text, { color: colors.textMuted }]}>
-        Bạn ấy đã trả lời rồi. Trả lời câu hỏi hôm nay ở mục “Hôm nay” để cùng xem nhé.
-      </Text>
+      <Text style={[styles.text, { color: colors.textMuted }]}>Bạn ấy đã trả lời rồi. Bạn trả lời nữa là hai bạn cùng xem được nhé.</Text>
     );
   } else if (day.is_today) {
-    partnerLine = <Text style={[styles.text, { color: colors.textMuted }]}>Chưa trả lời.</Text>;
+    partnerLine = <Text style={[styles.text, { color: colors.textMuted }]}>Bạn ấy chưa trả lời.</Text>;
   }
 
   return (
-    <View style={[styles.day, { backgroundColor: colors.background }]}>
-      <Text style={[styles.dayLabel, { color: day.is_today ? colors.primaryText : colors.text }]}>{day.label}</Text>
-      <Text style={[styles.question, { color: colors.textMuted }]}>{day.question}</Text>
+    <View style={[styles.day, { backgroundColor: day.is_today ? colors.primarySoft : colors.background },
+      day.is_today && { borderWidth: 1.5, borderColor: colors.primaryBorder }]}>
+      <View style={styles.dayHead}>
+        <Text style={[styles.dayLabel, { color: day.is_today ? colors.primaryText : colors.text }]}>{day.label}</Text>
+        {day.is_today && (
+          <View style={[styles.pill, { backgroundColor: colors.primary }]}>
+            <Text style={styles.pillText}>Câu hỏi hôm nay</Text>
+          </View>
+        )}
+      </View>
+      <Text style={[day.is_today ? styles.questionToday : styles.question, { color: day.is_today ? colors.text : colors.textMuted }]}>
+        {day.question}
+      </Text>
 
-      {!!day.my_answer && (
-        <Line colors={colors} who="Bạn" avatar={myAv}>
-          <Text style={[styles.text, { color: colors.text }]}>{day.my_answer}</Text>
-        </Line>
-      )}
-      {day.is_today && !day.my_answer && (
-        <Text style={[styles.text, { color: colors.textMuted, marginTop: 4 }]}>Bạn chưa trả lời câu hỏi hôm nay.</Text>
+      {day.is_today && !day.my_answer ? (
+        <AnswerBox colors={colors} busy={busy} onAnswer={onAnswer} err={answerErr} />
+      ) : (
+        !!day.my_answer && (
+          <Line colors={colors} who="Bạn" avatar={myAv}>
+            <Text style={[styles.text, { color: colors.text }]}>{day.my_answer}</Text>
+          </Line>
+        )
       )}
       {!!partnerLine && (
         <Line colors={colors} who={partnerName} avatar={pAv}>
@@ -288,10 +332,16 @@ const DayCard = memo(function DayCard({ colors, day, avatars, partnerName, busy,
   );
 });
 
-export const DiaryTab = ({ colors, diary, avatars = {}, partnerName, refreshControl }) => {
+export const DiaryTab = ({ colors, diary, avatars = {}, partnerName, refreshControl, todayInfo, onAnswer, answerErr }) => {
   const view = useRef(0);
   const content = useRef(0);
-  const { days, loaded, failed, hasMore, loadingMore, busy, err, reload, loadMore, addNote, editNote, removeNote } = diary;
+  const { days: loadedDays, loaded, failed, hasMore, loadingMore, busy, err, reload, loadMore, addNote, editNote, removeNote } = diary;
+  // Server chưa trả ngày hôm nay (nhật ký trống) nhưng đã có câu hỏi: dựng thẻ "hôm nay" từ trạng thái cặp đôi
+  const days =
+    todayInfo?.question && !loadedDays.some((d) => d.is_today)
+      ? [{ day: "today", label: "Hôm nay", is_today: true, question: todayInfo.question, my_answer: todayInfo.my_answer || null,
+          partner_answered: !!todayInfo.partner_answer, partner_answer: todayInfo.partner_answer || null, notes: [] }, ...loadedDays]
+      : loadedDays;
 
   // Nội dung chưa đủ dài để cuộn mà vẫn còn ngày cũ -> tải thêm cho đầy khung
   const fill = useCallback(() => {
@@ -342,7 +392,7 @@ export const DiaryTab = ({ colors, diary, avatars = {}, partnerName, refreshCont
       >
         {days.map((d) => (
           <DayCard key={d.day} colors={colors} day={d} avatars={avatars} partnerName={partnerName} busy={busy}
-            onAdd={addNote} onEdit={editNote} onRemove={removeNote} />
+            onAdd={addNote} onEdit={editNote} onRemove={removeNote} onAnswer={onAnswer} answerErr={answerErr} />
         ))}
         {loadingMore && <Skeleton colors={colors} />}
         {!hasMore && !loadingMore && (
@@ -359,9 +409,17 @@ export const DiaryTab = ({ colors, diary, avatars = {}, partnerName, refreshCont
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   day: { borderRadius: 14, padding: 14, marginBottom: 10 },
+  dayHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  pill: { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  pillText: { color: "#ffffff", fontSize: 11, fontWeight: "800" },
+  dayMini: { borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 10 },
+  miniLabel: { fontSize: 12.5, fontWeight: "800" },
+  miniText: { flex: 1, fontSize: 12.5 },
+  bubble: { borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
+  questionToday: { fontSize: 15, lineHeight: 21, fontWeight: "700", marginTop: 4, marginBottom: 4 },
   dayLabel: { fontSize: 14.5, fontWeight: "800" },
   question: { fontSize: 12.5, lineHeight: 18, marginTop: 2, marginBottom: 6 },
-  line: { flexDirection: "row", gap: 8, marginTop: 8, alignItems: "flex-start" },
+  line: { flexDirection: "row", gap: 8, marginTop: 10, alignItems: "flex-start" },
   lineBody: { flex: 1 },
   who: { fontSize: 11.5, fontWeight: "700", marginBottom: 1 },
   text: { fontSize: 13.5, lineHeight: 19 },
