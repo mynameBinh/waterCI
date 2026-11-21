@@ -255,12 +255,12 @@ const AnswerBox = ({ colors, busy, onAnswer, err }) => {
     <View style={styles.composer}>
       <View style={styles.formRow}>
         <Input colors={colors} value={text} onChangeText={setText} multiline maxLength={MAX_NOTE}
-          placeholder="Viết câu trả lời của bạn…" style={{ flex: 1, maxHeight: 100, backgroundColor: colors.card }}
+          placeholder="Viết câu trả lời …" style={{ flex: 1, maxHeight: 100, backgroundColor: colors.card }}
           accessibilityLabel="Trả lời câu hỏi hôm nay" />
         <Btn colors={colors} label="Gửi" onPress={send} busy={busy} disabled={!text.trim()} />
       </View>
       <Text style={[styles.counter, { color: colors.textMuted, textAlign: "left" }]}>
-        Bạn ấy sẽ xem được câu trả lời của bạn sau khi cũng trả lời.
+        Người ấy sẽ xem được câu trả lời của bạn sau khi cũng trả lời.
       </Text>
       {!!err && <Text style={[styles.text, { color: "#d64545", marginTop: 6 }]}>{err}</Text>}
     </View>
@@ -288,10 +288,10 @@ const DayCard = memo(function DayCard({ colors, day, avatars, partnerName, busy,
     partnerLine = <Text style={[styles.text, { color: colors.text }]}>{day.partner_answer}</Text>;
   } else if (day.is_today && day.partner_answered) {
     partnerLine = (
-      <Text style={[styles.text, { color: colors.textMuted }]}>Bạn ấy đã trả lời rồi. Bạn trả lời nữa là hai bạn cùng xem được nhé.</Text>
+      <Text style={[styles.text, { color: colors.textMuted }]}>Người ấy đã trả lời rồi. trả lời nữa là cả hai cùng xem được.</Text>
     );
   } else if (day.is_today) {
-    partnerLine = <Text style={[styles.text, { color: colors.textMuted }]}>Bạn ấy chưa trả lời.</Text>;
+    partnerLine = <Text style={[styles.text, { color: colors.textMuted }]}>Chưa trả lời.</Text>;
   }
 
   return (
@@ -397,7 +397,7 @@ export const DiaryTab = ({ colors, diary, avatars = {}, partnerName, refreshCont
         {loadingMore && <Skeleton colors={colors} />}
         {!hasMore && !loadingMore && (
           <Text style={[styles.end, { color: colors.textMuted }]}>
-            {days.length <= 1 ? "Nhật ký của hai bạn sẽ dày lên theo từng ngày." : "Đó là toàn bộ nhật ký của hai bạn."}
+            {days.length <= 1 ? "Nhật ký của sẽ dày lên theo từng ngày." : "Đó là toàn bộ nhật ký."}
           </Text>
         )}
       </ScrollView>

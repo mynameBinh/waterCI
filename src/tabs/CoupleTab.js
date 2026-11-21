@@ -9,7 +9,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Image, Platform, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
+import { AppState, Image, Platform, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Btn } from "../components/agent/AgentHomeCards";
 import { Skeleton } from "../components/agent/CoupleDiary";
@@ -51,6 +51,8 @@ const COUPLE_BGS = Object.fromEntries(
 const getCoupleBg = (accentKey) => COUPLE_BGS[accentKey] || COUPLE_BGS.ocean;
 const CARD_BORDER = 1.5;
 const CARD_TOP = 14 + 20 + 12;
+const AUTO_REFRESH_MS = 15000; // tab đang mở thì tự lấy dữ liệu mới mỗi bấy nhiêu ms
+const CONTENT_SHIFT = 20; // hạ mọi thứ nằm dưới tiêu đề xuống thêm bấy nhiêu px
 
 const CoupleTab = memo(function CoupleTab({
   username,
@@ -85,6 +87,35 @@ const CoupleTab = memo(function CoupleTab({
     if (active && !wasActive.current && token) reload();
     wasActive.current = active;
   }, [active, token, reload]);
+
+  // ── TỰ ĐỘNG LÀM MỚI: tab đang hiển thị -> tải lại định kỳ + ngay khi app quay lại từ nền ──
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
+  const busyRef = useRef(false);
+  const silentReload = useCallback(async () => {
+    if (busyRef.current) return; // chưa xong lần trước thì bỏ qua, không chồng request
+    busyRef.current = true;
+    try {
+      await reloadRef.current?.();
+    } catch {
+      /* im lặng: lần sau tự thử lại */
+    } finally {
+      busyRef.current = false;
+    }
+  }, []);
+  useEffect(() => {
+    if (!active || !token) return undefined;
+    const id = setInterval(() => {
+      if (AppState.currentState === "active") silentReload();
+    }, AUTO_REFRESH_MS);
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") silentReload();
+    });
+    return () => {
+      clearInterval(id);
+      sub.remove();
+    };
+  }, [active, token, silentReload]);
 
   // ── ảnh đại diện (ảnh người kia lấy từ server) ──
   const myUri = useAvatarUri(username);
@@ -203,7 +234,7 @@ const CoupleTab = memo(function CoupleTab({
     }
     setGaveUp(false);
     let tries = 0;
-    const first = setTimeout(measureSeat, 60);
+    const first = setTimeout(measureSeat, 110);
     const poll = setInterval(() => {
       if (aiSeatedRef.current || ++tries > 25) {
         clearInterval(poll);
@@ -221,7 +252,19 @@ const CoupleTab = memo(function CoupleTab({
     };
   }, [seatOn, measureSeat, username, onAiSeat]);
 
+  // rời tab / tab bị huỷ -> luôn trả nút AI về chỗ cũ (không để ghế treo lại)
+  const onAiSeatRef = useRef(onAiSeat);
+  onAiSeatRef.current = onAiSeat;
+  useEffect(
+    () => () => {
+      onAiSeatRef.current?.(null);
+    },
+    [],
+  );
+
   // ── giao diện ──
+  // Đã liên kết: bố cục CỐ ĐỊNH, không cuộn (đã có tự làm mới). Các màn chưa liên kết / đang tải cần nhập liệu -> vẫn cuộn được.
+  const fixedLayout = !!c && hasPartner && linked;
   let body;
   if (!c) {
     body = failed ? (
@@ -346,15 +389,19 @@ const CoupleTab = memo(function CoupleTab({
         </View>
       )}
 
-      <ScrollView
-        style={styles.flex}
-        contentContainerStyle={{ paddingTop: 12, paddingBottom: bottomPad }}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        refreshControl={refreshControl}
-      >
-        {body}
-      </ScrollView>
+      {fixedLayout ? (
+        <View style={[styles.flex, { paddingTop: 12, paddingBottom: bottomPad }]}>{body}</View>
+      ) : (
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={{ paddingTop: 12, paddingBottom: bottomPad }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={refreshControl}
+        >
+          {body}
+        </ScrollView>
+      )}
     </View>
   );
 });
@@ -374,7 +421,7 @@ export default CoupleTab;
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   root: { flex: 1, paddingHorizontal: 20, paddingTop: Platform.OS === "android" ? 12 : 20 },
-  titleRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  titleRow: { flexDirection: "row", alignItems: "center", marginBottom: 12 + CONTENT_SHIFT },
   titleLine: { flexDirection: "row", alignItems: "center" },
   title: { fontSize: 22, fontWeight: "800", marginLeft: 8 },
   sinceText: { fontSize: 12.5, fontWeight: "600", marginTop: 2, marginLeft: 30 },

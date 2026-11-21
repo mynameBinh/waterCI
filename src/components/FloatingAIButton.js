@@ -272,6 +272,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
   const dockSize = dockTarget?.size;
   const dockHandoff = !!dockTarget?.handoff;
   const settledRef = useRef(false); // đã tới ghế handoff và mờ đi (cá đang thế chỗ)
+  const targetLiveRef = useRef(false); // dockTarget MỚI NHẤT còn tồn tại không (chặn callback của chuyến bay đã bị huỷ giữa chừng)
   const fadeTimer = useRef(null); // chờ cá "Bạn" hiện đủ rồi mới mờ nút
   const handoffFade = useRef(new Animated.Value(1)).current; // 1 = nút hiện, 0 = đã nhường chỗ cho cá
   const onDockSettleRef = useRef(onDockSettle);
@@ -279,6 +280,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
 
   useEffect(() => {
     const b = boundsRef.current;
+    targetLiveRef.current = dockX != null && dockY != null;
     clearTimeout(fadeTimer.current); // huỷ lần mờ nút đang chờ (bay lại / rời ghế)
     // đang nhường chỗ cho cá mà ghế đổi / biến mất -> hiện nút lại, báo nơi vẽ cá mờ cá đi
     if (settledRef.current && !dockHandoff) {
@@ -290,7 +292,7 @@ const FloatingAIButton = memo(function FloatingAIButton({
       clearTimeout(returnTimer.current);
       if (!dockedRef.current) {
         dockedRef.current = true;
-        homeRef.current = { ...posRef.current };
+        if (!homeRef.current) homeRef.current = { ...posRef.current }; // đang bay về dở mà bị gọi đi lại -> giữ chỗ cũ thật, không lấy toạ độ lưng chừng
         x.stopAnimation();
         y.stopAnimation();
         setDocked(true);
@@ -305,11 +307,12 @@ const FloatingAIButton = memo(function FloatingAIButton({
           Animated.timing(y, { toValue: dockY - SIZE / 2, ...fly }),
           // KHÔNG đụng tới dockScale: nút giữ nguyên cỡ suốt chuyến bay
         ]).start(({ finished }) => {
-          if (!finished || !dockedRef.current) return; // bị ngắt (ghế đổi / rời tab) -> không nhập hình
+          // bị ngắt, hoặc ghế đã biến mất lúc đang bay (chuyển tab quá nhanh) -> KHÔNG nhập hình, nếu không nút mờ đi mà chẳng có cá nào thế chỗ
+          if (!finished || !dockedRef.current || !targetLiveRef.current) return;
           settledRef.current = true;
           onDockSettleRef.current?.(true); // -> cá "Bạn" bắt đầu hiện (nằm sau nút, nút vẫn đặc 100%)
           fadeTimer.current = setTimeout(() => {
-            if (!settledRef.current) return;
+            if (!settledRef.current || !targetLiveRef.current) return;
             Animated.timing(handoffFade, { toValue: 0, duration: HANDOFF_FADE_MS, useNativeDriver: false }).start();
           }, HANDOFF_FADE_DELAY);
         });
@@ -325,16 +328,26 @@ const FloatingAIButton = memo(function FloatingAIButton({
       returnTimer.current = setTimeout(() => {
         if (!dockedRef.current) return;
         dockedRef.current = false;
-        const home = homeRef.current;
-        homeRef.current = null;
+        targetLiveRef.current = false;
+        // chốt chặn: dù đang ở trạng thái nào cũng phải hiện nút lại + báo nơi vẽ cá mờ cá đi
+        clearTimeout(fadeTimer.current);
+        if (settledRef.current) {
+          settledRef.current = false;
+          onDockSettleRef.current?.(false);
+        }
+        Animated.timing(handoffFade, { toValue: 1, duration: 140, useNativeDriver: false }).start();
+        const home = homeRef.current; // giữ tới khi nút về hẳn chỗ cũ
         const toX = sideRef.current === "left" ? b.minX : b.maxX;
         const toY = clamp(home ? home.y : posRef.current.y, b.minY, b.maxY);
         Animated.parallel([
           Animated.spring(x, { toValue: toX, useNativeDriver: false, friction: 8, tension: 55 }),
           Animated.spring(y, { toValue: toY, useNativeDriver: false, friction: 8, tension: 55 }),
           Animated.spring(dockScale, { toValue: 1, useNativeDriver: false, friction: 7, tension: 70 }),
-        ]).start(({ finished }) => {
-          if (!finished || dockedRef.current) return; // bị ngắt vì lại có bước mới -> giữ nguyên trạng thái bay
+        ]).start(() => {
+          if (dockedRef.current) return; // lại có bước bay đi mới -> giữ nguyên trạng thái bay
+          // kể cả khi bị ngắt bởi applyLayout (đổi kích thước...) vẫn phải thoát trạng thái docked, nếu không nút kẹt pointerEvents="none"
+          homeRef.current = null;
+          handoffFade.setValue(1);
           setDocked(false);
           scheduleIdle();
         });

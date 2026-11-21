@@ -71,8 +71,8 @@ const FLAME_END_CY = WHALE_TOP - 3 - (FLAME_W * FLAME_END) / 2 - 1 + FLAME_DROP;
 const BABY = 26; // cỡ cá con
 const BABY_STEP = 30; // bước giữa hai cá con liền kề
 const BABY_ROWS = 2; // tối đa mấy hàng cá con (dư thì gộp thành chip "+N")
-const BABY_MIN_Y = LINE_Y - 2; // cá con bơi từ ngang mặt nước trở xuống (chỉnh số này để bơi cao/thấp hơn)
-const BABY_MAX_Y = ROW_H - BABY - 6; // ... tới sát đáy khung (giữa hai cá lớn không có chữ tên nên bơi xuống tận đáy được)
+const BABY_MIN_Y = LINE_Y - 8; // cá con bơi từ ngang mặt nước trở xuống (chỉnh số này để bơi cao/thấp hơn)
+const BABY_MAX_Y = ROW_H - BABY - 2; // ... tới sát đáy khung (giữa hai cá lớn không có chữ tên nên bơi xuống tận đáy được)
 const KISS_CLOSE = 4; // xích sát thêm bấy nhiêu px khi hôn (0 = vừa chạm khung ảnh; tăng nữa thì mõm hai cá chồng lên nhau, giảm nếu thấy đè)
 const KISS_DIST = HEART / 2 + GAP - 1 + KISS_CLOSE; // mỗi cá xích thêm bấy nhiêu px vào giữa để hôn
 const SPARKS = 14;
@@ -235,17 +235,17 @@ const Baby = memo(function Baby({ x, y, size, fromX, fromY, delay, phase, wander
   const legs = useMemo(() => {
     if (!wander) return [];
     const rnd = (a, b) => a + Math.random() * (b - a);
-    const speed = rnd(12, 22); // px/giây
     const out = [];
     let cx = x;
     let cy = y;
-    const N = 6;
+    const N = 10; // nhiều chặng hơn -> đường bơi ít lặp lại
     for (let k = 0; k < N; k += 1) {
       const last = k === N - 1;
       const tx = last ? x : rnd(minX, Math.max(minX, maxX));
       const ty = last ? y : rnd(minY, Math.max(minY, maxY));
       const dist = Math.hypot(tx - cx, ty - cy);
-      out.push({ dx: tx - x, dy: ty - y, dur: Math.max(1800, Math.min(5500, (dist / speed) * 1000)), right: tx >= cx, rest: rnd(0, 600) });
+      const speed = Math.random() < 0.25 ? rnd(48, 75) : rnd(24, 40); // px/giây; thỉnh thoảng phóng vọt một đoạn
+      out.push({ dx: tx - x, dy: ty - y, dur: Math.max(900, Math.min(4500, (dist / speed) * 1000)), right: tx >= cx, rest: rnd(0, 300) });
       cx = tx;
       cy = ty;
     }
@@ -809,7 +809,7 @@ const CoupleHeart = memo(function CoupleHeart({
             {/* cá con của hai người: nằm cùng lớp với cá (dưới dải sóng phía trước nên cũng ngập nước nhẹ) */}
             {showFlame && babyOn && babyLayout.slots.map((b) => (
               <Baby key={b.i} x={b.x} y={b.y} size={BABY} fromX={w / 2 - BABY / 2 - b.x} fromY={WHALE_TOP + 40 - b.y} delay={b.i * 80} phase={(b.i % 2) * 0.5} instant={!celebrate}
-                wander={!b.more} minX={COLW - START_BACK + 4} maxX={w - (COLW - START_BACK) - 4 - BABY} minY={BABY_MIN_Y} maxY={BABY_MAX_Y}>
+                wander={!b.more} minX={COLW - START_BACK} maxX={w - (COLW - START_BACK) - BABY} minY={BABY_MIN_Y} maxY={BABY_MAX_Y}>
                 {b.more ? (
                   <View style={[styles.babyMore, { backgroundColor: tint }]}>
                     <Text allowFontScaling={false} numberOfLines={1} style={styles.babyMoreText}>+{babyLayout.extra}</Text>

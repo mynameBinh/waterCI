@@ -71,13 +71,13 @@ export const LinkWaiting = ({ colors, couple, myName }) => {
         <View style={{ flex: 1 }}>
           <Text style={[styles.waitTitle, { color: colors.text }]}>Đang chờ {c.partner_username}</Text>
           <Text style={[styles.msg, { color: colors.textMuted }]}>
-            Bạn ấy cần mở mục Cặp đôi và nhập tên đăng nhập của bạn{myName ? ` (“${myName}”)` : ""} để hoàn tất liên kết.
+            Người ấy cần mở mục Cặp đôi và nhập tên đăng nhập của bạn{myName ? ` (“${myName}”)` : ""} để hoàn tất liên kết.
           </Text>
         </View>
       </View>
       <View style={styles.tip}>
         <Ionicons name="paper-plane-outline" size={15} color={colors.textMuted} />
-        <Text style={[styles.hint, { color: colors.textMuted, flex: 1 }]}>Gửi cho bạn ấy một tin nhắn để nhắc nhé, liên kết sẽ tự cập nhật khi bạn ấy xong.</Text>
+        <Text style={[styles.hint, { color: colors.textMuted, flex: 1 }]}>Gửi cho người ấy một tin nhắn để nhắc nhé, liên kết sẽ tự cập nhật khi người   ấy xong.</Text>
       </View>
       <Btn colors={colors} ghost label="Huỷ liên kết" onPress={confirm} busy={busy} style={styles.fullBtn} />
       {!!err && <Text style={[styles.msg, { color: "#d64545", marginTop: 8 }]}>{err}</Text>}

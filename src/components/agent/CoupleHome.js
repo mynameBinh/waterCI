@@ -241,8 +241,8 @@ const DiaryTile = ({ colors, c, avatars, partnerName, attention, onPress }) => {
   let partnerText = null;
   if (c.question) {
     if (c.partner_answer) partnerText = c.partner_answer;
-    else if (!c.my_answer) partnerText = "Bạn trả lời trước để xem câu trả lời của bạn ấy nhé.";
-    else partnerText = "Bạn ấy chưa trả lời.";
+    else if (!c.my_answer) partnerText = "trả lời trước để xem câu trả lời của người ấy nhé.";
+    else partnerText = "Người ấy chưa trả lời.";
   }
   return (
     <TouchableOpacity activeOpacity={0.85} onPress={onPress} accessibilityRole="button" accessibilityLabel="Mở nhật ký"
@@ -282,7 +282,7 @@ const MemoriesTile = ({ colors, c, attention, onPress }) => {
     big = String(c.together_days ?? 0);
     small = "ngày bên nhau";
   } else if (pending) {
-    small = pending.by_me ? "Đang chờ bạn ấy xác nhận ngày" : "Bạn ấy đề xuất một ngày, chạm để xem";
+    small = pending.by_me ? "Đang chờ người ấy xác nhận ngày" : "Người ấy đề xuất một ngày, chạm để xem";
   } else {
     small = "Chạm để đặt ngày bên nhau";
   }

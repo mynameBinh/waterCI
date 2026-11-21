@@ -161,15 +161,54 @@ const Panel = ({ colors, title, icon, children, right }) => (
   </View>
 );
 
-const MsChip = ({ colors, m, done }) => (
-  <View style={[styles.chip, { backgroundColor: colors.card, borderColor: done ? colors.primaryBorder : colors.border }]}>
-    <Ionicons name={done ? "checkmark-circle" : "time-outline"} size={16} color={done ? colors.primary : colors.textMuted} />
-    <Text style={[styles.chipLabel, { color: colors.text }]} numberOfLines={2}>{m.label}</Text>
-    <Text style={[styles.chipSub, { color: colors.textMuted }]}>
-      {done ? fmtDate(m.date) : m.days_left === 1 ? "Ngày mai" : `Còn ${m.days_left} ngày`}
-    </Text>
-  </View>
-);
+// ngày dương lịch (dd/mm/yyyy) của mốc: ưu tiên m.date từ server, không có thì tính từ số ngày còn lại
+const msDate = (m) => {
+  if (m.date) return fmtDate(m.date);
+  if (typeof m.days_left !== "number") return "";
+  const d = new Date();
+  d.setDate(d.getDate() + m.days_left);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+};
+
+// khung chờ 1 hàng, cùng chiều cao với NextMilestone (không dùng Skeleton nhiều hàng nữa)
+const NextSkeleton = ({ colors }) => {
+  const o = useRef(new Animated.Value(0.45)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(o, { toValue: 1, duration: 700, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(o, { toValue: 0.45, duration: 700, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [o]);
+  const bar = { backgroundColor: colors.border, borderRadius: 6 };
+  return (
+    <Animated.View style={[styles.nextRow, { opacity: o }]} accessibilityLabel="Đang tải mốc sắp tới">
+      <View style={{ flex: 1 }}>
+        <View style={[bar, { width: "55%", height: 14 }]} />
+        <View style={[bar, { width: "32%", height: 11, marginTop: 5 }]} />
+      </View>
+      <View style={[bar, { width: 64, height: 14 }]} />
+    </Animated.View>
+  );
+};
+
+const NextMilestone = ({ colors, m }) => {
+  const left = m.days_left === 0 ? "Hôm nay" : m.days_left === 1 ? "Ngày mai" : `Còn ${m.days_left} ngày`;
+  const date = msDate(m);
+  return (
+    <View style={styles.nextRow}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.chipLabel, { color: colors.text }]} numberOfLines={1}>{m.label}</Text>
+        {!!date && <Text style={[styles.hint, { color: colors.textMuted }]}>{date}</Text>}
+      </View>
+      <Text style={[styles.nextLeft, { color: colors.primaryText }]}>{left}</Text>
+    </View>
+  );
+};
 
 export const MemoriesTab = ({ colors, couple, together, weekly, avatars = {}, partnerName, refreshControl }) => {
   const { c, api, busy, err, run } = couple;
@@ -192,6 +231,10 @@ export const MemoriesTab = ({ colors, couple, together, weekly, avatars = {}, pa
   };
 
   // chúc mừng một lần cho mỗi mốc (nhớ trên máy theo tên đăng nhập + ngày bắt đầu + mốc)
+  const nextMs = useMemo(
+    () => (t?.upcoming || []).reduce((best, m) => (typeof m.days_left === "number" && (!best || m.days_left < best.days_left) ? m : best), null),
+    [t],
+  );
   const todayMs = t?.today;
   useEffect(() => {
     if (!todayMs || !since || !settings.milestone_enabled) return;
@@ -234,7 +277,7 @@ export const MemoriesTab = ({ colors, couple, together, weekly, avatars = {}, pa
           {pending && !pending.by_me ? (
             <View>
               <Text style={[styles.msg, { color: colors.text }]}>
-                {partnerName} đề xuất hai bạn bắt đầu bên nhau từ ngày {fmtDate(pending.date)}. Bạn thấy đúng không?
+                {partnerName} đề xuất bắt đầu bên nhau từ ngày {fmtDate(pending.date)}. Đúng chứ?
               </Text>
               <View style={styles.btnRow}>
                 <Btn colors={colors} ghost label="Chưa đúng" busy={busy}
@@ -269,7 +312,7 @@ export const MemoriesTab = ({ colors, couple, together, weekly, avatars = {}, pa
 
           {!since && !pending && (
             <Text style={[styles.msg, { color: colors.textMuted, marginBottom: 8 }]}>
-              Hai bạn bắt đầu bên nhau từ ngày nào? Một người đề xuất, người kia xác nhận là có hiệu lực nhé.
+              Đề xuất ngày bắt đầu bên nhau, chờ người ấy xác nhận.
             </Text>
           )}
           {(editing || (!since && !pending) || (pending && !pending.by_me)) && (
@@ -285,23 +328,17 @@ export const MemoriesTab = ({ colors, couple, together, weekly, avatars = {}, pa
           )}
         </Panel>
 
-        {/* ── các mốc ── */}
+        {/* ── mốc sắp tới (chỉ 1 mốc gần nhất) ── */}
         {since && (
-          <Panel colors={colors} title="Các mốc" icon="ribbon-outline">
+          <Panel colors={colors} title="Mốc sắp tới" icon="ribbon-outline">
             {!t && (together.failed ? (
-              <TouchableOpacity onPress={together.reload} accessibilityRole="button" accessibilityLabel="Thử tải lại các mốc">
-                <Text style={[styles.msg, { color: colors.textMuted }]}>Chưa tải được các mốc. Chạm để thử lại.</Text>
+              <TouchableOpacity onPress={together.reload} accessibilityRole="button" accessibilityLabel="Thử tải lại mốc sắp tới">
+                <Text style={[styles.msg, { color: colors.textMuted }]}>Chưa tải được. Chạm để thử lại.</Text>
               </TouchableOpacity>
-            ) : <Skeleton colors={colors} />)}
-            {!!t && (
-              <>
-                {!!t.upcoming?.length && <Text style={[styles.sub, { color: colors.textMuted }]}>Sắp tới</Text>}
-                <View style={styles.chips}>{(t.upcoming || []).map((m) => <MsChip key={m.key} colors={colors} m={m} done={false} />)}</View>
-                {!!t.achieved?.length && <Text style={[styles.sub, { color: colors.textMuted, marginTop: 10 }]}>Đã đạt ({t.achieved_total})</Text>}
-                <View style={styles.chips}>{(t.achieved || []).map((m) => <MsChip key={m.key} colors={colors} m={m} done />)}</View>
-                {!t.achieved?.length && <Text style={[styles.msg, { color: colors.textMuted }]}>Mốc đầu tiên là 100 ngày bên nhau. Còn một chặng nữa thôi.</Text>}
-              </>
-            )}
+            ) : <NextSkeleton colors={colors} />)}
+            {!!t && (nextMs
+              ? <NextMilestone colors={colors} m={nextMs} />
+              : <Text style={[styles.msg, { color: colors.textMuted }]}>Chưa có mốc nào sắp tới.</Text>)}
           </Panel>
         )}
 
@@ -359,7 +396,7 @@ export const MemoriesTab = ({ colors, couple, together, weekly, avatars = {}, pa
               <Text style={[styles.msg, { color: colors.text, marginTop: 4 }]}>{w.current.content}</Text>
             </View>
           ) : (
-            <Text style={[styles.msg, { color: colors.textMuted }]}>Bản tin tuần sẽ đến vào tối Chủ nhật. Hai bạn cứ thong thả nhé.</Text>
+            <Text style={[styles.msg, { color: colors.textMuted }]}>Bản tin tuần sẽ đến vào tối Chủ nhật.</Text>
           )}
           {!!w?.previous?.length && (
             <View style={{ marginTop: 10 }}>
@@ -389,7 +426,6 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 16 },
   msg: { fontSize: 13, lineHeight: 19 },
   hint: { fontSize: 12, lineHeight: 17 },
-  sub: { fontSize: 12, fontWeight: "700", marginBottom: 6 },
   link: { fontSize: 12.5, fontWeight: "700" },
   linkBtn: { alignSelf: "flex-start", marginTop: 6 },
   fullBtn: { width: "100%", marginTop: 12 },
@@ -401,10 +437,9 @@ const styles = StyleSheet.create({
   bigNum: { fontSize: 26, fontWeight: "800" },
   dateRow: { flexDirection: "row", alignItems: "center" },
   slash: { fontSize: 18, marginHorizontal: 5 },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  chip: { width: "48%", borderWidth: 1, borderRadius: 12, padding: 10, gap: 3 },
-  chipLabel: { fontSize: 13, fontWeight: "700" },
-  chipSub: { fontSize: 12 },
+  chipLabel: { fontSize: 13.5, fontWeight: "700" },
+  nextRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  nextLeft: { fontSize: 14, fontWeight: "800" },
   streakRow: { flexDirection: "row", alignItems: "center" },
   rescue: { borderWidth: 1, borderRadius: 12, padding: 12, marginTop: 12 },
   prev: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: 10, marginTop: 10 },
