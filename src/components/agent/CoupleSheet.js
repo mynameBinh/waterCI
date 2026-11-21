@@ -166,7 +166,7 @@ const TabBar = ({ colors, value, onChange, badges }) => (
 const prog = (x) => (typeof x?.progress === "number" ? x.progress : x?.day_complete ? 1 : 0);
 
 // Việc còn lại của một người. Dùng thêm me.pending_tasks / pending_list nếu server có; không thì suy ra từ số nước.
-const leftLines = (st) => {
+export const leftLines = (st) => {
   if (!st || st.day_complete) return [];
   const out = [];
   const left = Math.max(0, (st.water_goal || 0) - (st.water_ml || 0));
@@ -183,7 +183,7 @@ const leftLines = (st) => {
   return out;
 };
 
-const PersonRow = ({ colors, name, st, dim }) => {
+export const PersonRow = ({ colors, name, st, dim }) => {
   const done = !!st?.day_complete;
   const pct = Math.round(Math.min(1, Math.max(0, prog(st))) * 100);
   const lines = leftLines(st);
@@ -392,4 +392,5 @@ const styles = StyleSheet.create({
     flexDirection: "row", paddingHorizontal: 2 },
   tabText: { fontSize: 12.5, fontWeight: "700" },
   badge: { width: 6, height: 6, borderRadius: 3, marginLeft: 4 },
+
 });

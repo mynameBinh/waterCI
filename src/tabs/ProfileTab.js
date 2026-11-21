@@ -6,7 +6,6 @@ import {
   Animated,
   Easing,
   Image,
-  LayoutAnimation,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -19,8 +18,6 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useAgentApi } from "../components/agent/AgentHomeCards";
-import CoupleHeart, { coupleSeat } from "../components/agent/CoupleHeart";
 import {
   Avatar,
   avatarSource,
@@ -30,34 +27,10 @@ import {
   uploadAvatar,
   useAvatarUri,
 } from "../components/Avatar";
-import { CoupleSheetBody, coupleHeartProps, useCouple } from "../components/agent/CoupleSheet";
 import { getAgentName } from "../context/aiAgents";
 import { getAiAvatar } from "../context/aiThemes";
 import { useTheme } from "../context/ThemeContext";
 
-// Ảnh nền biển của thẻ Cặp đôi: mỗi màu chủ đạo (accent) một ảnh, đổi theo theme người dùng chọn. Thiếu màu -> ocean (xanh dương).
-// Metro bắt buộc require là đường dẫn tĩnh nên phải liệt kê từng ảnh. Tỉ lệ lấy từ chính file ảnh -> vẽ đúng tỉ lệ, KHÔNG cắt, KHÔNG méo.
-const localDay = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-};
-const COUPLE_PLAY_DELAY = 350; // ms: sau khi tab Tôi hiện ra (hiệu ứng chuyển tab ~220ms) mới cho cá bơi / bùm
-const COUPLE_BG_SOURCES = {
-  ocean: require("../../assets/background-couple/background-on-sea-blue.png"),
-  pink: require("../../assets/background-couple/background-on-sea-pink.png"),
-  yellow: require("../../assets/background-couple/background-on-sea-yellow.png"),
-  green: require("../../assets/background-couple/background-on-sea-green.png"),
-  purple: require("../../assets/background-couple/background-on-sea-purple.png"),
-  orange: require("../../assets/background-couple/background-on-sea-orange.png"),
-};
-const COUPLE_BGS = Object.fromEntries(
-  Object.entries(COUPLE_BG_SOURCES).map(([key, source]) => {
-    const meta = Image.resolveAssetSource(source) || {};
-    return [key, { source, ratio: meta.width && meta.height ? meta.width / meta.height : 0 }];
-  }),
-);
-const getCoupleBg = (accentKey) => COUPLE_BGS[accentKey] || COUPLE_BGS.ocean;
-const CARD_BORDER = 1.5;
 
 const THEME_OPTIONS = [
   { key: "light", icon: "sunny", label: "Sáng" },
@@ -244,10 +217,7 @@ const ProfileTab = memo(function ProfileTab({
   token,
   apiBase,
   authFetch,
-  active = true, // tab Tôi đang hiện
-  coupleSync = 0, // Dashboard tăng số này sau mỗi lần check-in (nước / mục tiêu) -> tải lại tiến độ Cặp đôi để cá bơi theo
-  onAiSeat, // ({ x, y, size, face, handoff } | null) -> báo cho Dashboard chỗ nút AI nổi cần bay tới
-  aiSeated = false, // nút AI nổi đã tới ghế và mờ đi -> cá "Bạn" hiện ra thế chỗ
+  couple, // trạng thái Cặp đôi (useCouple) do Dashboard giữ, dùng chung với tab Cặp đôi: ở đây chỉ để đồng bộ ảnh đại diện + theme
 }) {
   const {
     themePreference,
@@ -274,28 +244,6 @@ const ProfileTab = memo(function ProfileTab({
   const [aiOpen, setAiOpen] = useState(false); // bảng chọn AI-agent
   const [styleOpen, setStyleOpen] = useState(false); // bảng "Màu & nút chụp"
   const [themeOpen, setThemeOpen] = useState(false); // bảng "Chế độ hiển thị" (sáng / tối / hệ thống)
-  const [settingsOpen, setSettingsOpen] = useState(false); // mục "Cài đặt" sổ xuống / thu gọn
-  const toggleSettings = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setSettingsOpen((v) => !v);
-  }, []);
-  const [coupleOpen, setCoupleOpen] = useState(false); // bảng "Cặp đôi"
-  const coupleApi = useAgentApi(token, apiBase, authFetch);
-  const couple = useCouple(coupleApi, !!token, username);
-
-  // ── Đồng bộ tiến độ cá: check-in xong (coupleSync đổi) hoặc vừa mở lại tab Tôi -> tải lại dữ liệu Cặp đôi ──
-  const lastCoupleSync = useRef(coupleSync);
-  useEffect(() => {
-    if (!token || lastCoupleSync.current === coupleSync) return;
-    lastCoupleSync.current = coupleSync;
-    couple.reload();
-  }, [coupleSync, token, couple.reload]);
-  const wasActive = useRef(active);
-  useEffect(() => {
-    if (active && !wasActive.current && token) couple.reload();
-    wasActive.current = active;
-  }, [active, token, couple.reload]);
-
   // ── Báo theme của mình (màu chủ đạo + AI-agent) lên server để người kia thấy cá của mình đúng màu ──
   const themeSent = useRef("");
   const myTheme = couple.c?.my_theme;
@@ -305,12 +253,12 @@ const ProfileTab = memo(function ProfileTab({
     const sig = `${accentKey}|${aiThemeKey}`;
     if (themeSent.current === sig) return;
     themeSent.current = sig;
-    coupleApi("/api/couple/theme", { method: "PUT", body: JSON.stringify({ accent: accentKey, ai_theme: aiThemeKey }) }).catch(
+    couple.api("/api/couple/theme", { method: "PUT", body: JSON.stringify({ accent: accentKey, ai_theme: aiThemeKey }) }).catch(
       () => {
         themeSent.current = ""; // lỗi mạng: lần sau thử lại
       },
     );
-  }, [token, couple.c, myTheme?.accent, myTheme?.ai_theme, accentKey, aiThemeKey, coupleApi]);
+  }, [token, couple.c, myTheme?.accent, myTheme?.ai_theme, accentKey, aiThemeKey, couple.api]);
 
   // ── Ảnh đại diện: lưu trên máy (hiện ở mọi nơi), đồng bộ lên server để người kia trong Cặp đôi thấy ──
   const myAvatarUri = useAvatarUri(username);
@@ -374,156 +322,10 @@ const ProfileTab = memo(function ProfileTab({
     () => avatarSource({ apiBase, token, username, version: myServerV }),
     [apiBase, token, username, myServerV],
   );
-  const partnerName = couple.c?.partner_username;
-  const partnerSource = useMemo(
-    () => avatarSource({ apiBase, token, username: partnerName, version: partnerServerV }),
-    [apiBase, token, partnerName, partnerServerV],
-  );
-  const coupleAvatars = useMemo(
-    () => ({ myName: username, myUri: myAvatarUri, mySource: myAvatarUri ? null : mySource, partnerSource }),
-    [username, myAvatarUri, mySource, partnerSource],
-  );
-
-  const coupleLinked = !!couple.c?.partner_username;
-
-  // ── Ảnh nền thẻ Cặp đôi: bề rộng thẻ -> chiều cao ảnh đúng tỉ lệ ──
-  const [cardW, setCardW] = useState(0);
-  const [cardH, setCardH] = useState(0);
-  const bgW = Math.max(0, cardW - CARD_BORDER * 2);
-  const coupleBg = getCoupleBg(accentKey); // ảnh nền theo màu chủ đạo đang chọn
-  const bgH = coupleBg.ratio && bgW ? bgW / coupleBg.ratio : 0;
-
-  // ── Nút AI nổi "hoá" thành cá "Bạn" ──
-  // Mở tab: KHÔNG có cá nào chờ sẵn. Nút AI bay tới ghế (hiện đúng chỗ cá "Bạn"), tới nơi thì nút mờ đi và cá "Bạn" hiện ra thế chỗ
-  // -> cá có đủ nhấp nhô / nghiêng đầu / núp sau dải sóng như cá đối diện. Từ đó ghế CỐ ĐỊNH: cuộn trang chỉ làm cá cuộn theo thẻ,
-  // nút không rời ghế rồi quay lại nữa (chỉ rời khi sang tab khác / cá lao vào tim).
-  const { height: winH } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
-  const heartRef = useRef(null);
-  const [heartW, setHeartW] = useState(0);
-  const [heartBox, setHeartBox] = useState({ y: 0, h: 0 }); // vị trí + cao của khung cá trong thẻ (để nước tràn xuống tận đáy thẻ)
-  const heartLive = coupleLinked && couple.c ? coupleHeartProps(couple.c, colors, couple.heart) : null; // dữ liệu mới nhất từ server
-  const flameOn = !!heartLive && !!heartLive.bothDone && (heartLive.streak || 0) > 0; // đã hoàn thành + có chuỗi (bùm -> hôn -> cá con)
-  // Sau hoàn thành cá "Bạn" VẪN ở lại (bơi ra mép ngoài) nên nút AI nổi vẫn phải nhập vào cá và ẨN suốt thời gian ở tab Tôi (không để hiện thêm 1 con cá thứ hai)
-  const wantSeat = !!onAiSeat && !!heartLive; // thẻ Cặp đôi dùng cơ chế nút AI -> cá
-  const seatOn = wantSeat && active && heartW > 0;
-  const [gaveUp, setGaveUp] = useState(false); // quá lâu không gọi được nút AI sang -> cho cá "Bạn" hiện để thẻ không bị thiếu cá
-  const seatSentRef = useRef(false);
-  const hideMine = wantSeat && !aiSeated && !gaveUp; // chưa có nút AI tới nơi -> chưa có cá "Bạn"
-
-  // ── Hoạt ảnh cá CHỈ chạy khi người dùng đang nhìn thấy tab Tôi ──
-  // Tab Tôi luôn được dựng sẵn (ẩn). Nếu để CoupleHeart nhận dữ liệu mới ngay khi check-in xong thì cá bơi / "bùm" / cá con chạy lúc tab
-  // đang ẩn và lúc mở tab chẳng còn gì để xem. Nên khi tab ẩn ta "đóng băng" props đang hiển thị (lần đầu: tiến độ 0, chưa bùm); khi tab
-  // hiện ra (và nút AI đã nhập vào cá "Bạn") đợi PLAY_DELAY cho hiệu ứng chuyển tab xong rồi mới cấp dữ liệu mới -> cá bơi, bùm, hôn, cá con.
-  //
-  // Hoạt ảnh HOÀN THÀNH (bùm -> hôn -> cá con) chỉ xem MỘT lần mỗi ngày + mỗi mức streak: xem xong lưu `ngày|streak` vào máy.
-  // Thoát app vào lại (cùng ngày, cùng streak) thì hiện thẳng trạng thái cuối (cá ở hai bên, cá con bơi, lửa trên đầu), không phát lại.
-  const celebStore = `couple_celebrated:${username || ""}`;
-  const seenRef = useRef(""); // giá trị đã lưu: "ngày|streak" của lần hoàn thành đã xem
-  const [seenLoaded, setSeenLoaded] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    AsyncStorage.getItem(celebStore)
-      .then((v) => { seenRef.current = v || ""; })
-      .catch(() => { seenRef.current = ""; })
-      .finally(() => { if (alive) setSeenLoaded(true); });
-    return () => { alive = false; };
-  }, [celebStore]);
-  const celebKey = flameOn ? `${localDay()}|${heartLive.streak}` : null;
-  const celebDecision = useRef(null); // { key, play } — quyết định MỘT lần cho mỗi celebKey, không đổi giữa chừng khi vừa lưu "đã xem"
-  if (celebKey && seenLoaded && celebDecision.current?.key !== celebKey) celebDecision.current = { key: celebKey, play: seenRef.current !== celebKey };
-  const skipCeleb = !!celebKey && celebDecision.current?.key === celebKey && !celebDecision.current.play; // đã xem hôm nay -> bỏ qua hoạt ảnh
-
-  const [playOn, setPlayOn] = useState(false);
-  useEffect(() => {
-    if (!active) {
-      setPlayOn(false); // tab ẩn lại -> đóng băng, lần mở sau sẽ phát tiếp phần mới
-      return undefined;
-    }
-    if (hideMine || !seenLoaded) return undefined; // nút AI còn đang bay vào (chưa có cá "Bạn") hoặc chưa đọc xong "đã xem" -> chờ
-    const id = setTimeout(() => setPlayOn(true), COUPLE_PLAY_DELAY);
-    return () => clearTimeout(id);
-  }, [active, hideMine, seenLoaded]);
-  // đã ở lại tab đủ lâu (qua cú hôn) -> ghi nhận "đã xem"
-  useEffect(() => {
-    if (!playOn || !celebKey || !celebDecision.current?.play) return undefined;
-    const id = setTimeout(() => {
-      seenRef.current = celebKey;
-      AsyncStorage.setItem(celebStore, celebKey).catch(() => {});
-    }, 3000);
-    return () => clearTimeout(id);
-  }, [playOn, celebKey, celebStore]);
-
-  const shownRef = useRef(null);
-  if (!heartLive) shownRef.current = null;
-  else if (!shownRef.current) shownRef.current = { ...heartLive, myProgress: 0, partnerProgress: 0, bothDone: false };
-  else if (playOn || skipCeleb) shownRef.current = heartLive;
-  const heartP = shownRef.current; // props CoupleHeart thực sự nhận
-  const myProg = heartP?.myProgress ?? 0;
-  const aiSeatedRef = useRef(aiSeated);
-  aiSeatedRef.current = aiSeated;
-
-  const measureSeat = useCallback(() => {
-    if (!seatOn || !heartRef.current || aiSeatedRef.current) return; // đã vào ghế rồi thì giữ nguyên, không đo lại
-    heartRef.current.measureInWindow((px, py, rw) => {
-      if (!rw) return; // tab đang ẩn (display:none) -> chưa có toạ độ thật
-      const s = coupleSeat(heartW, flameOn ? 0 : myProg); // đã hoàn thành: cá "Bạn" đứng ở mép ngoài (tiến độ 0) sau khi bơi ra xa
-      const x = px + s.x;
-      const y = py + s.y;
-      if (y < insets.top + 8 || y > winH - insets.bottom - 110) {
-        // ghế đang nằm ngoài vùng nhìn thấy (cuộn ra khỏi màn hình / dưới dock) -> nút ở lại mép, cuộn tới nơi sẽ bay vào
-        onAiSeat(null);
-        return;
-      }
-      seatSentRef.current = true;
-      onAiSeat({ x, y, size: s.size, face: "right", handoff: true });
-    });
-  }, [seatOn, heartW, myProg, flameOn, insets.top, insets.bottom, winH, onAiSeat]);
-
-  // Thẻ Cặp đôi đã được dựng sẵn khi tab còn ẩn (dữ liệu + ảnh tải trước), nên vừa mở tab là gọi nút AI sang ngay
-  useEffect(() => {
-    if (!seatOn) {
-      onAiSeat?.(null);
-      seatSentRef.current = false;
-      return undefined;
-    }
-    setGaveUp(false);
-    // đo ngay rồi đo lại liên tục tới khi nút vào ghế (tab còn đang trượt / chưa có toạ độ thì lần sau sửa); toạ độ đổi thì nút tự đổi hướng
-    let tries = 0;
-    const first = setTimeout(measureSeat, 60);
-    const poll = setInterval(() => {
-      if (aiSeatedRef.current || ++tries > 25) {
-        clearInterval(poll);
-        return;
-      }
-      measureSeat();
-    }, 120);
-    const giveUp = setTimeout(() => {
-      if (!aiSeatedRef.current && !seatSentRef.current) setGaveUp(true);
-    }, 2800);
-    return () => {
-      clearTimeout(first);
-      clearInterval(poll);
-      clearTimeout(giveUp);
-    };
-  }, [seatOn, measureSeat, username, memberTier, onAiSeat]);
-
-  // Cuộn: chỉ quan trọng khi nút CHƯA vào ghế (đang bay / chưa bay) -> huỷ chuyến bay theo toạ độ cũ, cuộn xong đo lại.
-  // Nút đã vào ghế thì bỏ qua hoàn toàn: ghế cố định, không rời đi.
-  const onScrollStart = useCallback(() => {
-    if (seatOn && !aiSeatedRef.current) onAiSeat(null);
-  }, [seatOn, onAiSeat]);
-  const onScrollEnd = useCallback(() => {
-    if (!aiSeatedRef.current) setTimeout(measureSeat, 60);
-  }, [measureSeat]);
-
   return (
     <ScrollView
       contentContainerStyle={profileContent}
       showsVerticalScrollIndicator={false}
-      onScrollBeginDrag={onScrollStart}
-      onScrollEndDrag={onScrollEnd}
-      onMomentumScrollEnd={onScrollEnd}
     >
       {/* Avatar */}
       <View style={styles.profileHeader}>
@@ -595,126 +397,9 @@ const ProfileTab = memo(function ProfileTab({
       </View>
 
 
-      {/* Cặp đôi — thẻ nổi bật ngay dưới mục tiêu: hai ảnh đại diện + sóng nhịp tim, chạm để mở */}
-      <TouchableOpacity
-        style={[
-          styles.coupleCard,
-          { backgroundColor: colors.primarySoft, borderColor: colors.primaryBorder },
-          coupleLinked && bgH > 0 && { minHeight: bgH + CARD_BORDER * 2 }, // thẻ không bao giờ thấp hơn ảnh nền
-        ]}
-        onLayout={(e) => {
-          setCardW(Math.round(e.nativeEvent.layout.width));
-          setCardH(Math.ceil(e.nativeEvent.layout.height)); // làm tròn LÊN: làm tròn xuống có thể thiếu nửa pixel ở đáy nước
-        }}
-        onPress={() => setCoupleOpen(true)}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Cặp đôi"
-      >
-        {coupleLinked && bgH > 0 && (
-          // Ảnh nền: đúng tỉ lệ gốc (không cắt, không méo), neo đáy thẻ; thẻ cao hơn ảnh thì phần trên là màu nền thẻ
-          <Image
-            source={coupleBg.source}
-            resizeMode="stretch"
-            fadeDuration={0}
-            pointerEvents="none"
-            style={{ position: "absolute", left: 0, bottom: 0, width: bgW, height: bgH }}
-          />
-        )}
-        <View style={styles.coupleHead}>
-          <Ionicons name="heart" size={18} color={colors.primary} />
-          <Text style={[styles.coupleTitle, { color: colors.text }]}>Cặp đôi</Text>
-          {couple.needsAttention && (
-            <View style={[styles.coupleDot, { backgroundColor: colors.primary }]} />
-          )}
-          <View style={{ flex: 1 }} />
-          {!coupleLinked || !couple.c?.linked ? (
-            <Text
-              style={[styles.coupleSummary, { color: colors.primaryText }]}
-              numberOfLines={1}
-            >
-              {coupleLinked ? "Đang chờ" : "Liên kết ngay"}
-            </Text>
-          ) : null}
-          <Ionicons name="chevron-forward" size={16} color={colors.primaryText} />
-        </View>
-        {coupleLinked ? (
-          <>
-            <View
-              ref={heartRef}
-              collapsable={false}
-              onLayout={(e) => {
-                const { y, width, height } = e.nativeEvent.layout;
-                setHeartW(Math.round(width));
-                setHeartBox({ y, h: height });
-              }}
-            >
-              <CoupleHeart
-                colors={colors}
-                partnerName={partnerName}
-                bleed={16}
-                bleedBottom={
-                  bgH > 0 && cardH > 0 && heartBox.h > 0
-                    ? // có ảnh nền: nước tràn xuống tận đáy thẻ (thẻ có thể cao hơn nội dung vì minHeight = chiều cao ảnh nền).
-                      // +4 = marginBottom của CoupleHeart: heartBox.h gồm lề này nhưng đáy khung nước (ROW_H) thì không -> trước đây hụt vài px
-                      Math.max(12, Math.ceil(cardH - CARD_BORDER - (heartBox.y + heartBox.h)) + 4)
-                    : couple.c?.linked && couple.c?.together_days > 0 ? 0 : 12
-                }
-                backdrop={bgH > 0}
-                labelColor={bgH > 0 ? "#ffffff" : undefined}
-                hideMine={hideMine}
-                {...heartP}
-                celebrate={!skipCeleb}
-              />
-            </View>
-            {couple.c?.linked && couple.c?.together_days > 0 && (
-              <Text style={[styles.coupleDays, { color: colors.primaryText }]}>
-                Ngày thứ {couple.c.together_days} bên nhau
-              </Text>
-            )}
-          </>
-        ) : (
-          <Text style={[styles.coupleHint, { color: colors.textMuted }]}>
-            {couple.summary === "Chưa liên kết"
-              ? "Liên kết với người kia để xem tiến độ của nhau, giữ chuỗi chung và trả lời câu hỏi mỗi ngày."
-              : couple.summary}
-          </Text>
-        )}
-      </TouchableOpacity>
-      <PickerSheet
-        visible={coupleOpen}
-        onClose={() => setCoupleOpen(false)}
-        title="Cặp đôi"
-        colors={colors}
-        tall
-      >
-        <CoupleSheetBody colors={colors} couple={couple} avatars={coupleAvatars} />
-      </PickerSheet>
 
-      {/* Cài đặt: thu gọn mặc định, chạm vào để sổ xuống */}
-      <TouchableOpacity
-        style={[
-          styles.settingsCard,
-          styles.settingsHeader,
-          { backgroundColor: colors.card, shadowColor: colors.dockShadow },
-          settingsOpen && { marginBottom: 16 },
-        ]}
-        onPress={toggleSettings}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel="Cài đặt"
-        accessibilityState={{ expanded: settingsOpen }}
-      >
-        <Ionicons name="settings-outline" size={19} color={colors.textMuted} />
-        <Text style={[styles.settingsHeaderText, { color: colors.text }]}>Cài đặt</Text>
-        <Ionicons
-          name={settingsOpen ? "chevron-up" : "chevron-down"}
-          size={18}
-          color={colors.textMuted}
-        />
-      </TouchableOpacity>
-      {settingsOpen && (
-        <View>
+      {/* Cài đặt: hiện sẵn, không cần bấm để sổ xuống */}
+      <View>
           <SectionTag label="Chung" colors={colors} />
           <View style={[styles.settingsCard, styles.compactCard, styles.tagged, { backgroundColor: colors.card, shadowColor: colors.dockShadow }]}>
             <PickerRow
@@ -1034,8 +719,7 @@ const ProfileTab = memo(function ProfileTab({
               </>
             )}
           </View>
-        </View>
-      )}
+      </View>
     </ScrollView>
   );
 });

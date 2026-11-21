@@ -24,7 +24,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AIChatModal from "../components/AIChatModal";
-import AgentHomeCards from "../components/agent/AgentHomeCards"; // >>> water_agent
+import AgentHomeCards, { useAgentApi } from "../components/agent/AgentHomeCards"; // >>> water_agent
+import { useCouple } from "../components/agent/CoupleSheet"; // >>> water_agent
 import { useAgentSync } from "../components/agent/useAgentSync"; // >>> water_agent
 import CameraOverlay from "../components/CameraOverlay";
 import FloatingAIButton from "../components/FloatingAIButton";
@@ -35,6 +36,7 @@ import HeaderComponent from "../components/HeaderComponent";
 import HistoryComponent from "../components/HistoryComponent";
 import MainActionButtonComponent from "../components/MainActionButtonComponent";
 import { useTheme } from "../context/ThemeContext";
+import CoupleTab from "../tabs/CoupleTab";
 import NotificationsTab from "../tabs/NotificationsTab";
 import ProfileTab from "../tabs/ProfileTab";
 import RoadmapTab from "../tabs/RoadmapTab";
@@ -333,6 +335,9 @@ export default function DashboardScreen({ token, onLogout }) {
 
   // Nhắc nhở do AI/server tạo -> thông báo cục bộ (không cần push APNs) // >>> water_agent
   useAgentSync({ token, apiBase: API_BASE, authFetch });
+  // Trạng thái Cặp đôi giữ ở Dashboard: tab "Cặp đôi" và tab "Tôi" (đồng bộ ảnh đại diện / theme) dùng chung
+  const coupleApi = useAgentApi(token, API_BASE, authFetch);
+  const couple = useCouple(coupleApi, !!token, username);
 
   // ── Streak: đồng bộ từ server (streak chỉ tăng khi đủ nước VÀ xong hết mục tiêu) ──
   const fetchStreak = useCallback(async () => {
@@ -1428,7 +1433,8 @@ export default function DashboardScreen({ token, onLogout }) {
     setChatOrigin(origin && typeof origin.x === "number" ? origin : null); // nơi khác gọi (không có toạ độ) -> bung từ góc dưới phải
     setShowAIChat(true);
   }, []);
-  const profileActive = activeTab === "profile";
+  const coupleActive = activeTab === "couple";
+  const openTheoDoi = useCallback(() => setActiveTab("theodoi"), []); // chạm cá người kia -> tab Theo dõi (không còn ở dock)
   const profileTab = useMemo(
     () => (
     <ProfileTab
@@ -1443,17 +1449,11 @@ export default function DashboardScreen({ token, onLogout }) {
       token={token}
       apiBase={API_BASE}
       authFetch={authFetch}
-      active={profileActive}
-      coupleSync={coupleSync}
-      onAiSeat={handleProfileSeat}
-      aiSeated={aiSeated}
+      couple={couple}
     />
     ),
     [
-      profileActive,
-      coupleSync,
-      handleProfileSeat,
-      aiSeated,
+      couple,
       username,
       memberTier,
       goalMl,
@@ -1489,8 +1489,7 @@ export default function DashboardScreen({ token, onLogout }) {
   // Android: giới hạn theo screenWidth vì màn hình hẹp (~320-340dp, phổ biến
   // ở phân khúc giá rẻ) có thể khiến dock tràn ra ngoài hoặc sát mép.
   const dockItemCount =
-    3 + // Check-in + Mục tiêu + Tôi
-    (userRole === "embe" ? 1 : 0) +
+    4 + // Check-in + Mục tiêu + Cặp đôi + Tôi
     (memberTier === "Em bé của Bình" ? 1 : 0);
   const baseDockWidth = Math.max(280, dockItemCount * 72 + 32); // 4 item = 320 như cũ
   const dockWidth = IS_ANDROID
@@ -1568,6 +1567,16 @@ export default function DashboardScreen({ token, onLogout }) {
               activeTab !== "theodoi" && styles.hiddenTab,
             ]}
           >
+            <TouchableOpacity
+              onPress={() => setActiveTab("couple")}
+              activeOpacity={0.7}
+              style={styles.theoDoiBack}
+              accessibilityRole="button"
+              accessibilityLabel="Quay lại Cặp đôi"
+            >
+              <Ionicons name="chevron-back" size={18} color={colors.primary} />
+              <Text style={[styles.theoDoiBackText, { color: colors.primary }]}>Cặp đôi</Text>
+            </TouchableOpacity>
             <TheoDoiTab
               token={token}
               containerStyle={profileContentStyle}
@@ -1576,20 +1585,45 @@ export default function DashboardScreen({ token, onLogout }) {
           </Animated.View>
         )}
 
-        {/* ── PROFILE TAB ── */}
+        {/* ── CẶP ĐÔI TAB ── */}
         <Animated.View
-          // Tab Tôi KHÔNG dùng display:none khi ẩn: giữ nguyên layout (trong suốt, không chạm được) để ảnh nền/cá được dựng + giải mã sẵn
-          // và đo được ghế ngay -> mở tab là nút AI bay vào luôn, không phải chờ tải lại.
-          pointerEvents={activeTab === "profile" ? "auto" : "none"}
-          importantForAccessibility={activeTab === "profile" ? "auto" : "no-hide-descendants"}
-          accessibilityElementsHidden={activeTab !== "profile"}
+          // Giống tab Tôi cũ: KHÔNG dùng display:none khi ẩn, giữ layout (trong suốt, không chạm được) để ảnh nền/cá được dựng sẵn
+          // và đo được ghế ngay -> mở tab là nút AI bay vào luôn.
+          pointerEvents={coupleActive ? "auto" : "none"}
+          importantForAccessibility={coupleActive ? "auto" : "no-hide-descendants"}
+          accessibilityElementsHidden={!coupleActive}
           style={[
             {
               flex: 1,
               opacity: tabFadeAnim,
               transform: [{ translateY: tabSlideAnim }],
             },
-            activeTab !== "profile" && styles.hiddenTabKeepLayout,
+            !coupleActive && styles.hiddenTabKeepLayout,
+          ]}
+        >
+          <CoupleTab
+            username={username}
+            token={token}
+            apiBase={API_BASE}
+            couple={couple}
+            active={coupleActive}
+            coupleSync={coupleSync}
+            onAiSeat={handleProfileSeat}
+            aiSeated={aiSeated}
+            onOpenTheoDoi={userRole === "embe" ? openTheoDoi : undefined}
+            bottomPad={IS_ANDROID ? dockClearance + 30 : 110}
+          />
+        </Animated.View>
+
+        {/* ── PROFILE TAB ── */}
+        <Animated.View
+          style={[
+            {
+              flex: 1,
+              opacity: tabFadeAnim,
+              transform: [{ translateY: tabSlideAnim }],
+            },
+            activeTab !== "profile" && styles.hiddenTab,
           ]}
         >
           {profileTab}
@@ -1676,7 +1710,7 @@ export default function DashboardScreen({ token, onLogout }) {
         onPress={handleOpenAIChat}
         bubble={aiBubble}
         onBubbleClose={handleBubbleClose}
-        dockTarget={scanTarget || saveTarget || volumeTarget || (profileActive ? profileSeat : null)}
+        dockTarget={scanTarget || saveTarget || volumeTarget || (coupleActive ? profileSeat : null)}
         onDockSettle={setAiSeated}
         hidden={chatMounted}
         badge={!!appeal}
@@ -1725,19 +1759,18 @@ export default function DashboardScreen({ token, onLogout }) {
             colors={colors}
             compact={isCompactWidth}
           />
-          {userRole === "embe" && (
-            <DockItem
-              tab="theodoi"
-              activeTab={activeTab}
-              setActiveTab={setActiveTab}
-              icon="eye-outline"
-              activeIcon="eye"
-              label="Theo dõi"
-              activeColor={colors.primary}
-              colors={colors}
-              compact={isCompactWidth}
-            />
-          )}
+          <DockItem
+            tab="couple"
+            // đang ở tab Theo dõi (mở từ cá người kia) thì vẫn sáng mục Cặp đôi
+            activeTab={activeTab === "theodoi" ? "couple" : activeTab}
+            setActiveTab={setActiveTab}
+            icon="heart-outline"
+            activeIcon="heart"
+            label="Cặp đôi"
+            activeColor={colors.primary}
+            colors={colors}
+            compact={isCompactWidth}
+          />
           {memberTier === "Em bé của Bình" && (
             <DockItem
               tab="gifts"
@@ -2152,6 +2185,8 @@ const styles = StyleSheet.create({
   // với insets thực tế của từng máy Android thay vì số cố định.
   scrollContent: { paddingHorizontal: 16, paddingTop: 2, flex: 1 },
   hiddenTab: { display: "none" },
+  theoDoiBack: { flexDirection: "row", alignItems: "center", paddingHorizontal: 14, paddingTop: 8, paddingBottom: 2 },
+  theoDoiBackText: { fontSize: 14, fontWeight: "700", marginLeft: 2 },
   hiddenTabKeepLayout: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, opacity: 0, zIndex: -1 },
 
   // ── Header modal Nhắc nhở ──────────────────────────────────────────────

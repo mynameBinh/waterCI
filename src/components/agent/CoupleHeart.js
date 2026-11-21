@@ -17,7 +17,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Animated, Easing, Image, StyleSheet, Text, View } from "react-native";
+import { Animated, Easing, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Defs, Path, RadialGradient, Stop } from "react-native-svg";
 import { getAiAvatar, getAiAvatarStyle } from "../../context/aiThemes";
 import { useTheme } from "../../context/ThemeContext";
@@ -66,7 +66,8 @@ const FLAME_W = 84;
 const FLAME_POP = 0.45; // cỡ ngọn lửa lúc bùm lên giữa tim (vừa khe hở hẹp giữa hai cá)
 const FLAME_END = 0.5; // cỡ ngọn lửa khi đã bay lên đứng trên đầu hai cá
 const FLAME_CY = LINE_Y - 6; // tâm ngọn lửa lúc bùm
-const FLAME_END_CY = WHALE_TOP - 3 - (FLAME_W * FLAME_END) / 2 - 1; // tâm ngọn lửa khi đã bay lên: đáy lửa nằm ngay trên đỉnh ảnh cá (tính cả biên độ nhấp nhô 3px). Có thể âm = lửa nhô lên trên mép khung, không làm đổi chiều cao khung
+const FLAME_DROP = 15; // hạ ngọn lửa chuỗi (sau khi hoàn thành) xuống thêm bấy nhiêu px so với trước; 0 = vị trí cũ
+const FLAME_END_CY = WHALE_TOP - 3 - (FLAME_W * FLAME_END) / 2 - 1 + FLAME_DROP; // tâm ngọn lửa khi đã bay lên: đáy lửa nằm ngay trên đỉnh ảnh cá (tính cả biên độ nhấp nhô 3px). Có thể âm = lửa nhô lên trên mép khung, không làm đổi chiều cao khung
 const BABY = 26; // cỡ cá con
 const BABY_STEP = 30; // bước giữa hai cá con liền kề
 const BABY_ROWS = 2; // tối đa mấy hàng cá con (dư thì gộp thành chip "+N")
@@ -75,7 +76,7 @@ const BABY_MAX_Y = ROW_H - BABY - 6; // ... tới sát đáy khung (giữa hai c
 const KISS_CLOSE = 4; // xích sát thêm bấy nhiêu px khi hôn (0 = vừa chạm khung ảnh; tăng nữa thì mõm hai cá chồng lên nhau, giảm nếu thấy đè)
 const KISS_DIST = HEART / 2 + GAP - 1 + KISS_CLOSE; // mỗi cá xích thêm bấy nhiêu px vào giữa để hôn
 const SPARKS = 14;
-const FACES_LEFT = true; // ảnh cá gốc quay sang TRÁI; nếu ảnh mới quay phải thì đặt false
+export const FACES_LEFT = true; // ảnh cá gốc quay sang TRÁI; nếu ảnh mới quay phải thì đặt false
 
 const MOODS = {
   flat: { bpm: 40, amp: 0, line: 0.3 },
@@ -334,7 +335,7 @@ const Twinkle = memo(function Twinkle({ x, y, size, dur, delay, color }) {
 
 // Cá con MÀU LAI: cùng hình dáng cá, xếp chồng ảnh theo màu chủ đạo của mình (lớp dưới, đặc) và của người kia (lớp trên, ~40-60% mờ)
 // -> màu pha giữa hai màu mà vẫn giữ nguyên chi tiết (mắt, vây). Mỗi con lệch tỉ lệ pha một chút cho tự nhiên. Hai người cùng màu -> cá con cùng màu.
-const BabyFish = memo(function BabyFish({ i, shapeKey, accentA, accentB }) {
+export const BabyFish = memo(function BabyFish({ i, shapeKey, accentA, accentB }) {
   const srcA = getAiAvatar(shapeKey, accentA);
   const mix = accentB && accentB !== accentA;
   const srcB = mix ? getAiAvatar(shapeKey, accentB) : null;
@@ -370,6 +371,7 @@ const CoupleHeart = memo(function CoupleHeart({
   partnerDim = false,
   mirrorPartner = true,
   celebrate = true,
+  onPartnerPress, // có hàm này thì chạm vào con cá của người kia sẽ gọi nó (tab Cặp đôi dùng để mở "Theo dõi")
   bleed = 0, // nước tràn ra hai bên bằng đúng padding ngang của thẻ chứa (ProfileTab: 16) để không bị viền trống
   backdrop = false, // true = thẻ chứa đã có ảnh nền biển: giữ sóng nước động, bỏ san hô tự vẽ (ảnh đã có)
   labelColor, // màu tên hai người (mặc định colors.text)
@@ -721,7 +723,7 @@ const CoupleHeart = memo(function CoupleHeart({
   const filledHeart = bothDone && !showFlame; // cả hai xong nhưng không có chuỗi: tim tô đặc
 
   return (
-    <View style={styles.wrap} accessible accessibilityRole="image" accessibilityLabel={label}>
+    <View style={styles.wrap} accessible={!onPartnerPress} accessibilityRole="image" accessibilityLabel={label}>
       <View style={styles.row} onLayout={(e) => setW(Math.round(e.nativeEvent.layout.width))}>
         {w > 0 && (
           <>
@@ -787,10 +789,16 @@ const CoupleHeart = memo(function CoupleHeart({
               )}
               <Animated.Text style={[styles.name, { color: labelColor || colors.text, opacity: mineOp }]} numberOfLines={1}>Bạn</Animated.Text>
             </Animated.View>
-            <Animated.View pointerEvents="none"
+            <Animated.View pointerEvents={onPartnerPress ? "box-none" : "none"}
               style={[styles.col, { right: -START_BACK, transform: [{ translateX: rightX }, { translateX: kissR }] }]}>
               <Animated.View style={{ marginTop: WHALE_TOP, transform: [{ translateY: bobYR }, { translateX: swayR }, { rotate: tiltR }, { rotate: kissTiltR }] }}>
-                <Agent source={partnerSrc} themeKey={partnerThemeKey} size={WH} flip={flipRight} dim={partnerDim} glow={partnerGlow} gid="R" />
+                {onPartnerPress ? (
+                  <Pressable onPress={onPartnerPress} hitSlop={10} accessibilityRole="button" accessibilityLabel={`Xem theo dõi của ${pName}`}>
+                    <Agent source={partnerSrc} themeKey={partnerThemeKey} size={WH} flip={flipRight} dim={partnerDim} glow={partnerGlow} gid="R" />
+                  </Pressable>
+                ) : (
+                  <Agent source={partnerSrc} themeKey={partnerThemeKey} size={WH} flip={flipRight} dim={partnerDim} glow={partnerGlow} gid="R" />
+                )}
               </Animated.View>
               {active && !partnerDim && WAKE.map((p, i) => (
                 <Particle key={i} live={live} x={COLW - p.ox - p.s} y={LINE_Y - 8} dx={p.dx} dy={p.dy} size={p.s} dur={p.dur} delay={p.delay + 350} color={tint} />
