@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
 import { memo } from "react";
-import { Image, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 
 export const API_BASE = "https://binhhn21-water-check-in-backend.hf.space";
@@ -131,7 +132,13 @@ export const PhotoGrid = memo(function PhotoGrid({ colors, items, badge, placeho
             )}
           </View>
           {item.imageUrl ? (
-            <Image source={{ uri: item.imageUrl }} style={styles.photo} resizeMode="cover" />
+            <Image
+              source={{ uri: item.imageUrl }}
+              style={styles.photo}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={150}
+            />
           ) : (
             <View style={[styles.photo, styles.photoPlaceholder]}>
               <Ionicons name={placeholderIcon} size={28} color={colors.primary} />

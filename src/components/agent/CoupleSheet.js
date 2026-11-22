@@ -53,17 +53,19 @@ export function useCouple(api, enabled = true, username = null) {
       .catch(() => {});
   }, [username]);
 
+  const loadSeq = useRef(0); // số thứ tự lần tải: tải chồng nhau thì chỉ kết quả của lần MỚI NHẤT được ghi (không để bản cũ về trễ đè lên bản mới)
   const load = useCallback(async () => {
     if (!enabled) return;
+    const mine = (loadSeq.current += 1);
     try {
       const r = await api("/api/couple/status");
-      if (mounted.current) {
+      if (mounted.current && mine === loadSeq.current) {
         setC(r);
         setFailed(false);
         if (username) AsyncStorage.setItem(STATUS_KEY(username), JSON.stringify(r)).catch(() => {});
       }
     } catch {
-      if (mounted.current) setFailed(true); // giữ nguyên dữ liệu cũ nếu có
+      if (mounted.current && mine === loadSeq.current) setFailed(true); // giữ nguyên dữ liệu cũ nếu có
     }
   }, [api, enabled, username]);
   useRefreshOnActive(load);

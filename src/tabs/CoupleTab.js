@@ -52,6 +52,7 @@ const getCoupleBg = (accentKey) => COUPLE_BGS[accentKey] || COUPLE_BGS.ocean;
 const CARD_BORDER = 1.5;
 const CARD_TOP = 14 + 20 + 12;
 const AUTO_REFRESH_MS = 15000; // tab đang mở thì tự lấy dữ liệu mới mỗi bấy nhiêu ms
+const SYNC_WAIT_MS = 1500; // vừa mở tab: chờ tối đa bấy nhiêu ms cho dữ liệu mới về rồi mới cho cá chạy hoạt ảnh (quá hạn thì chạy luôn)
 const CONTENT_SHIFT = 20; // hạ mọi thứ nằm dưới tiêu đề xuống thêm bấy nhiêu px
 
 const CoupleTab = memo(function CoupleTab({
@@ -82,9 +83,28 @@ const CoupleTab = memo(function CoupleTab({
     lastSync.current = coupleSync;
     reload();
   }, [coupleSync, token, reload]);
+  // Vừa mở tab: lấy dữ liệu mới TRƯỚC, trong lúc đó `syncing` = true -> cá chưa chạy hoạt ảnh (tránh chạy theo dữ liệu cũ rồi giật sang dữ liệu mới)
   const wasActive = useRef(active);
+  const mountedRef = useRef(true);
+  const [syncing, setSyncing] = useState(false);
+  useEffect(() => () => { mountedRef.current = false; }, []);
   useEffect(() => {
-    if (active && !wasActive.current && token) reload();
+    if (active && !wasActive.current && token) {
+      let done = false;
+      let cap = null;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(cap);
+        if (mountedRef.current) setSyncing(false);
+      };
+      cap = setTimeout(finish, SYNC_WAIT_MS);
+      setSyncing(true);
+      Promise.resolve()
+        .then(() => reload())
+        .catch(() => {})
+        .finally(finish);
+    }
     wasActive.current = active;
   }, [active, token, reload]);
 
@@ -188,10 +208,10 @@ const CoupleTab = memo(function CoupleTab({
       setPlayOn(false);
       return undefined;
     }
-    if (hideMine || !seenLoaded) return undefined;
+    if (hideMine || !seenLoaded || syncing) return undefined;
     const id = setTimeout(() => setPlayOn(true), COUPLE_PLAY_DELAY);
     return () => clearTimeout(id);
-  }, [active, hideMine, seenLoaded]);
+  }, [active, hideMine, seenLoaded, syncing]);
   useEffect(() => {
     if (!playOn || !celebKey || !celebDecision.current?.play) return undefined;
     const id = setTimeout(() => {
@@ -205,6 +225,11 @@ const CoupleTab = memo(function CoupleTab({
   if (!heartLive) shownRef.current = null;
   else if (!shownRef.current) shownRef.current = { ...heartLive, myProgress: 0, partnerProgress: 0, bothDone: false };
   else if (playOn || skipCeleb) shownRef.current = heartLive;
+  else if (!active) {
+    // Tab đang ẩn (người dùng không nhìn thấy): cho cá về đúng tiến độ MỚI ngay, lặng lẽ.
+    // Chỉ giữ bothDone/streak cũ để màn "BÙM" + cá con mới sinh vẫn chờ tới lúc mở tab mới diễn.
+    shownRef.current = { ...heartLive, bothDone: shownRef.current.bothDone, streak: shownRef.current.streak };
+  }
   const heartP = shownRef.current;
   const myProg = heartP?.myProgress ?? 0;
   const aiSeatedRef = useRef(aiSeated);

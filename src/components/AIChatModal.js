@@ -59,6 +59,7 @@ import {
 import ChatPlusSheet, { CHAT_MODELS } from "./ChatPlusSheet";
 import ChoiceButtons from "./fileTools/ChoiceButtons";
 import AgentActionCards from "./agent/AgentActionCards"; // >>> water_agent
+import { INBOX_LABEL, isInboxUnread } from "./agent/AgentHomeCards";
 import { applyFileMeta, extractChoices, extractFromAttrs, googleLinks, SERVER_FORMATS } from "./fileTools/exportMeta";
 import FileCardV2 from "./fileTools/FileCardV2";
 import { GoogleAccountSheet } from "./fileTools/GoogleAccountSection";
@@ -2602,6 +2603,14 @@ const guessMime = (name = "", mime) => {
   return "text/plain";
 };
 
+// Câu mở đầu của AI khi người dùng mở một thông báo hộp thư
+const inboxIntro = (it) => {
+  const text = String(it.text || "").trim();
+  if (it.kind === "partner")
+    return `${it.from || "Người ấy"} vừa nhắn:\n\n> ${text}\n\nBạn muốn trả lời sao? Cứ nói ý chính, mình soạn giúp một tin thật tự nhiên nhé.`;
+  return `${INBOX_LABEL[it.kind] || "Thông báo"}:\n\n> ${text}\n\nBạn có muốn mình giúp gì với tin này không?`;
+};
+
 const AIChatModal = memo(function AIChatModal({
   visible,
   onClose,
@@ -2613,6 +2622,9 @@ const AIChatModal = memo(function AIChatModal({
   appeal, // { id, kind, uri, text, status, expiresAt, containerType, maxVolume } | null — check-in bị từ chối đang chờ giải thích
   onAppealChange, // (appeal | null) => void — báo trạng thái mới (approved) hoặc null (bị từ chối / hết hạn)
   onAppealApproved, // (appeal) => void — user bấm nút sau khi AI duyệt (Dashboard mở bảng chọn ml / ghi nhận mục tiêu)
+  inbox, // { items, unread, refresh, markRead } | undefined — hộp thư (chuông thông báo)
+  inboxSeed, // { item, nonce } | null — bấm bong bóng hộp thư -> mở thẳng cuộc trò chuyện về tin này
+  onInboxSeedUsed, // () => void
 }) {
   const { colors } = useTheme();
   const avatar = useAiAvatar();
@@ -2773,6 +2785,40 @@ const AIChatModal = memo(function AIChatModal({
     scrollToEnd();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, appeal?.id]);
+
+  // ── Hộp thư: mở một thông báo -> cuộc trò chuyện mới, AI mở lời bằng nội dung tin đó ──
+  const inboxCtxRef = useRef(null); // tin hộp thư đang trò chuyện -> gửi kèm lên backend (inbox_context)
+  const seededInboxRef = useRef(null);
+  const startInboxChat = useCallback(
+    (it) => {
+      if (!it || sendingRef.current) return;
+      inboxCtxRef.current = { id: it.id, kind: it.kind, from: it.from || "", text: it.text || "" };
+      inbox?.markRead?.([it.id]);
+      setInAppeal(false);
+      seededRef.current = null;
+      setConvId(null);
+      setPending([]);
+      setInput("");
+      setPanel(null);
+      setMessages([{ id: nextId(), role: "assistant", content: inboxIntro(it), inboxId: it.id }]);
+      atBottomRef.current = true;
+      scrollToEnd();
+    },
+    [inbox, scrollToEnd],
+  );
+  // đặt SAU effect khiếu nại: nếu cùng lúc có cả hai thì tin hộp thư được ưu tiên
+  useEffect(() => {
+    if (!visible || !inboxSeed || seededInboxRef.current === inboxSeed.nonce || sending) return;
+    seededInboxRef.current = inboxSeed.nonce;
+    startInboxChat(inboxSeed.item);
+    onInboxSeedUsed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, inboxSeed?.nonce]);
+  const openInbox = useCallback(() => {
+    setPanel("inbox");
+    setPanelError("");
+    inbox?.refresh?.();
+  }, [inbox]);
 
   // ── Hiệu ứng mở / đóng ─────────────────────────────────────────────────────
   //  Bấm nút nổi -> khung chat "bung" ra từ ĐÚNG vị trí nút (spring nhẹ, bo góc tròn -> vuông),
@@ -3021,6 +3067,7 @@ const AIChatModal = memo(function AIChatModal({
         setConvId(id);
         setInAppeal(false);
         seededRef.current = null;
+        inboxCtxRef.current = null;
         setPending([]);
         setPanel(null);
       } catch (e) {
@@ -3513,6 +3560,7 @@ const AIChatModal = memo(function AIChatModal({
           agent: agentKey, // backend đổi tên + tính cách AI theo agent
           agent_name: agentName, // dự phòng: backend khớp theo tên nếu key không trùng
           appeal_id: appealId, // đang giải thích cho check-in bị từ chối -> server tự đính kèm lại ảnh tạm cho AI xem
+          inbox_context: inboxCtxRef.current || undefined, // đang trò chuyện về một thông báo hộp thư
         };
 
         if (appealId) {
@@ -3706,6 +3754,7 @@ const AIChatModal = memo(function AIChatModal({
     setConvId(null);
     setInAppeal(false);
     seededRef.current = null; // mở lại chat vẫn có thể quay về khiếu nại còn hạn
+    inboxCtxRef.current = null;
     setPanel(null);
   }, [sending]);
 
@@ -3720,6 +3769,7 @@ const AIChatModal = memo(function AIChatModal({
     setConvId(null);
     setInAppeal(false);
     seededRef.current = null;
+    inboxCtxRef.current = null;
     setPanel(null);
   }, [agentKey]);
 
@@ -4306,6 +4356,26 @@ const AIChatModal = memo(function AIChatModal({
                   </Text>
                 </View>
                 <TouchableOpacity
+                  onPress={openInbox}
+                  hitSlop={8}
+                  style={styles.headerBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Thông báo"
+                >
+                  <Ionicons
+                    name={inbox?.unread ? "notifications" : "notifications-outline"}
+                    size={22}
+                    color={inbox?.unread ? colors.primary : colors.textMuted}
+                  />
+                  {inbox?.unread > 0 && (
+                    <View style={styles.bellBadge}>
+                      <Text style={styles.bellBadgeText}>
+                        {inbox.unread > 9 ? "9+" : inbox.unread}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
                   onPress={openMemory}
                   hitSlop={8}
                   style={styles.headerBtn}
@@ -4772,7 +4842,9 @@ const AIChatModal = memo(function AIChatModal({
                     >
                       {panel === "history"
                         ? "Lịch sử chat"
-                        : agentText.memoryTitle}
+                        : panel === "inbox"
+                          ? "Thông báo"
+                          : agentText.memoryTitle}
                     </Text>
                     {panel === "memory" && memories.length > 0 && (
                       <TouchableOpacity
@@ -5055,6 +5127,72 @@ const AIChatModal = memo(function AIChatModal({
                         }}
                       />
                     </View>
+                  ) : panel === "inbox" ? (
+                    <FlatList
+                      data={inbox?.items || []}
+                      keyExtractor={(it) => String(it.id)}
+                      contentContainerStyle={styles.panelList}
+                      ListEmptyComponent={
+                        <Text
+                          style={[styles.panelEmpty, { color: colors.textMuted }]}
+                        >
+                          Chưa có thông báo nào 🔔
+                        </Text>
+                      }
+                      renderItem={({ item: it }) => {
+                        const unread = isInboxUnread(it);
+                        return (
+                          <TouchableOpacity
+                            activeOpacity={0.8}
+                            onPress={() => startInboxChat(it)}
+                            style={[
+                              styles.rowCard,
+                              {
+                                backgroundColor: unread
+                                  ? colors.primarySoft
+                                  : colors.card,
+                                borderColor: unread
+                                  ? colors.primaryBorder
+                                  : colors.border,
+                              },
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel="Mở thông báo để trò chuyện"
+                          >
+                            <View style={{ flex: 1 }}>
+                              <Text
+                                style={[
+                                  styles.rowSub,
+                                  { color: colors.textMuted, marginBottom: 2 },
+                                ]}
+                              >
+                                {INBOX_LABEL[it.kind] || "Thông báo"}
+                                {it.from ? ` · ${it.from}` : ""}
+                              </Text>
+                              <Text
+                                numberOfLines={3}
+                                style={[styles.rowTitle, { color: colors.text }]}
+                              >
+                                {it.text}
+                              </Text>
+                            </View>
+                            {unread && (
+                              <View
+                                style={[
+                                  styles.unreadDot,
+                                  { backgroundColor: colors.primary },
+                                ]}
+                              />
+                            )}
+                            <Ionicons
+                              name="chevron-forward"
+                              size={18}
+                              color={colors.textMuted}
+                            />
+                          </TouchableOpacity>
+                        );
+                      }}
+                    />
                   ) : (
                     <FlatList
                       data={memories}
@@ -5151,6 +5289,20 @@ const AIChatModal = memo(function AIChatModal({
 export default AIChatModal;
 
 const styles = StyleSheet.create({
+  bellBadge: {
+    position: "absolute",
+    top: 2,
+    right: 0,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    backgroundColor: "#ef4444",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bellBadgeText: { color: "#ffffff", fontSize: 10, fontWeight: "800" },
+  unreadDot: { width: 8, height: 8, borderRadius: 4, marginHorizontal: 8 },
   composerWrap: { paddingHorizontal: 12, paddingTop: 8 },
   composer: {
     borderWidth: 1,

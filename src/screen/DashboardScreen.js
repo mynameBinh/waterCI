@@ -24,7 +24,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AIChatModal from "../components/AIChatModal";
-import AgentHomeCards, { useAgentApi } from "../components/agent/AgentHomeCards"; // >>> water_agent
+import { useAgentApi, useInboxBubbles } from "../components/agent/AgentHomeCards"; // >>> water_agent
 import { useCouple } from "../components/agent/CoupleSheet"; // >>> water_agent
 import { useAgentSync } from "../components/agent/useAgentSync"; // >>> water_agent
 import CameraOverlay from "../components/CameraOverlay";
@@ -210,11 +210,19 @@ export default function DashboardScreen({ token, onLogout }) {
   // Bong bóng tin nhắn từ AI (hiện cạnh nút nổi) — thay cho Alert "thành công"
   const [aiBubble, setAiBubble] = useState(null);
   const pendingAiComment = useRef(""); // câu cảm thán AI trả về ở bước quét nước, dùng khi user xác nhận
+  const aiBubbleRef = useRef(null);
+  aiBubbleRef.current = aiBubble;
+  const lastInboxBubble = useRef({ item: null, closedAt: 0 }); // bong bóng hộp thư vừa tắt (để bắt cú bấm trùng lúc nó tự tắt)
+  const [inboxSeed, setInboxSeed] = useState(null); // { item, nonce } -> AIChatModal mở cuộc trò chuyện về tin này
+  // inbox: tin gốc của hộp thư nếu bong bóng này đến từ hộp thư (useInboxBubbles)
   const showAIBubble = useCallback(
-    (text, meta, tone) => setAiBubble({ id: Date.now(), text, meta, tone }),
+    (text, meta, tone, inbox) => setAiBubble({ id: Date.now(), text, meta, tone, inbox: inbox || null }),
     [],
   );
-  const handleBubbleClose = useCallback(() => setAiBubble(null), []);
+  const handleBubbleClose = useCallback(() => {
+    if (aiBubbleRef.current?.inbox) lastInboxBubble.current = { item: aiBubbleRef.current.inbox, closedAt: Date.now() };
+    setAiBubble(null);
+  }, []);
   // Check-in bị AI từ chối -> server giữ tạm ảnh; bấm bong bóng (hoặc nút AI có chấm đỏ) để giải thích với chat bot.
   // { id, kind: 'water'|'task', uri, text, status: 'open'|'approved', expiresAt, containerType, maxVolume }
   const [appeal, setAppeal] = useState(null);
@@ -338,6 +346,9 @@ export default function DashboardScreen({ token, onLogout }) {
   // Trạng thái Cặp đôi giữ ở Dashboard: tab "Cặp đôi" và tab "Tôi" (đồng bộ ảnh đại diện / theme) dùng chung
   const coupleApi = useAgentApi(token, API_BASE, authFetch);
   const couple = useCouple(coupleApi, !!token, username);
+  // Hộp thư (chấp nhận cặp đôi, nhắc nhở, tin từ người ấy...) -> bong bóng chat của nút AI nổi thay vì thẻ chèn ở tab check-in
+  // trả về { items, unread, refresh, markRead } -> AIChatModal vẽ chuông thông báo, nút nổi hiện chấm đỏ
+  const inbox = useInboxBubbles({ api: coupleApi, enabled: !!token, paused: chatMounted, bubble: aiBubble, showBubble: showAIBubble });
 
   // ── Streak: đồng bộ từ server (streak chỉ tăng khi đủ nước VÀ xong hết mục tiêu) ──
   const fetchStreak = useCallback(async () => {
@@ -1307,13 +1318,6 @@ export default function DashboardScreen({ token, onLogout }) {
         completedDates={completedDates}
       />
 
-      {/* ── Thẻ AI: hộp thư (water_agent) — "Cặp đôi" nay nằm ở tab "Tôi" ── */}
-      <AgentHomeCards
-        token={token}
-        apiBase={API_BASE}
-        authFetch={authFetch}
-      />
-
       {/* ── Streak Recovery Banner ── */}
       {canUseStreakRecovery && (
         <TouchableOpacity
@@ -1430,6 +1434,11 @@ export default function DashboardScreen({ token, onLogout }) {
     ],
   );
   const handleOpenAIChat = useCallback((origin) => {
+    // bong bóng hộp thư đang hiện (hoặc vừa tắt <0,8s) -> mở chat nói về đúng tin đó; không thì mở chat thường (có chuông)
+    const l = lastInboxBubble.current;
+    const inboxItem = aiBubbleRef.current?.inbox || (l.item && Date.now() - l.closedAt < 800 ? l.item : null);
+    setInboxSeed(inboxItem ? { item: inboxItem, nonce: Date.now() } : null);
+    lastInboxBubble.current = { item: null, closedAt: 0 };
     setChatOrigin(origin && typeof origin.x === "number" ? origin : null); // nơi khác gọi (không có toạ độ) -> bung từ góc dưới phải
     setShowAIChat(true);
   }, []);
@@ -1642,6 +1651,9 @@ export default function DashboardScreen({ token, onLogout }) {
         appeal={appeal}
         onAppealChange={setAppeal}
         onAppealApproved={handleAppealApproved}
+        inbox={inbox}
+        inboxSeed={inboxSeed}
+        onInboxSeedUsed={() => setInboxSeed(null)}
       />
 
       {/* ── MODAL CÀI ĐẶT NHẮC NHỞ (chuyển từ tab riêng sang đây) ── */}
@@ -1713,7 +1725,7 @@ export default function DashboardScreen({ token, onLogout }) {
         dockTarget={scanTarget || saveTarget || volumeTarget || (coupleActive ? profileSeat : null)}
         onDockSettle={setAiSeated}
         hidden={chatMounted}
-        badge={!!appeal}
+        badge={!!appeal || inbox.unread > 0}
       />
 
       {/* ── DOCK ── */}

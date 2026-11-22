@@ -7,12 +7,13 @@
 //   3. Các bảng BottomSheet cho Nhật ký, Kỷ niệm, và Tuỳ chỉnh (mở từ icon bánh răng trên CoupleTab).
 // =============================================================================
 import { Ionicons } from "@expo/vector-icons";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Easing,
   KeyboardAvoidingView,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -32,28 +33,53 @@ import { SettingsTab } from "./CoupleSettings";
 import { leftLines } from "./CoupleSheet";
 
 // ── bảng trượt từ dưới lên ──[cite: 1]
+const CLOSE_DIST = 90; // kéo xuống quá bấy nhiêu px thì đóng bảng
+const CLOSE_VELOCITY = 0.8; // hoặc vuốt xuống đủ nhanh (px/ms)
 const BottomSheet = ({ visible, onClose, title, colors, children }) => {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const [mounted, setMounted] = useState(visible);
   const anim = useRef(new Animated.Value(0)).current;
+  const drag = useRef(new Animated.Value(0)).current; // độ lệch xuống khi ngón tay đang kéo bảng
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     if (visible) {
+      drag.setValue(0);
       setMounted(true);
       Animated.timing(anim, { toValue: 1, duration: 240, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
     } else {
       Animated.timing(anim, { toValue: 0, duration: 180, easing: Easing.in(Easing.quad), useNativeDriver: true }).start(({ finished }) => {
-        if (finished) setMounted(false);
+        if (finished) {
+          setMounted(false);
+          drag.setValue(0);
+        }
       });
     }
-  }, [visible, anim]);
+  }, [visible, anim, drag]);
+
+  // Kéo xuống ở phần đầu bảng (thanh nắm + dòng tiêu đề): thả ra quá ngưỡng / vuốt nhanh thì đóng, không thì bật về chỗ cũ
+  const pan = useMemo(() => {
+    const snapBack = () => Animated.spring(drag, { toValue: 0, bounciness: 6, useNativeDriver: true }).start();
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => false, // chạm đơn (nút đóng) vẫn hoạt động bình thường
+      onMoveShouldSetPanResponder: (_e, g) => g.dy > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_e, g) => drag.setValue(Math.max(0, g.dy)),
+      onPanResponderRelease: (_e, g) => {
+        if (g.dy > CLOSE_DIST || g.vy > CLOSE_VELOCITY) closeRef.current?.();
+        else snapBack();
+      },
+      onPanResponderTerminate: snapBack,
+    });
+  }, [drag]);
 
   if (!mounted) return null;
+  const dragFade = drag.interpolate({ inputRange: [0, height * 0.6], outputRange: [1, 0.3], extrapolate: "clamp" });
   return (
     <Modal transparent visible animationType="none" statusBarTranslucent onRequestClose={onClose}>
       <KeyboardAvoidingView style={styles.sheetRoot} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.45)", opacity: anim }]}>
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.45)", opacity: Animated.multiply(anim, dragFade) }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityRole="button" accessibilityLabel="Đóng" />
         </Animated.View>
         <Animated.View
@@ -63,17 +89,19 @@ const BottomSheet = ({ visible, onClose, title, colors, children }) => {
               backgroundColor: colors.card,
               paddingBottom: Math.max(insets.bottom, 12) + 8,
               height: height * 0.86,
-              transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [height * 0.5, 0] }) }],
+              transform: [{ translateY: Animated.add(anim.interpolate({ inputRange: [0, 1], outputRange: [height * 0.5, 0] }), drag) }],
             },
           ]}
         >
-          <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
-          <View style={styles.sheetHeader}>
-            <Text style={[styles.sheetTitle, { color: colors.text }]}>{title}</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={10} activeOpacity={0.7} accessibilityRole="button" accessibilityLabel="Đóng"
-              style={[styles.sheetClose, { backgroundColor: colors.background }]}>
-              <Ionicons name="close" size={18} color={colors.textMuted} />
-            </TouchableOpacity>
+          <View {...pan.panHandlers} style={styles.dragZone}>
+            <View style={[styles.sheetHandle, { backgroundColor: colors.border }]} />
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, { color: colors.text }]}>{title}</Text>
+              <TouchableOpacity onPress={onClose} hitSlop={10} activeOpacity={0.7} accessibilityRole="button" accessibilityLabel="Đóng"
+                style={[styles.sheetClose, { backgroundColor: colors.background }]}>
+                <Ionicons name="close" size={18} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
           </View>
           <View style={styles.sheetBody}>{children}</View>
         </Animated.View>
@@ -309,7 +337,12 @@ const CoupleHome = ({ colors, couple, avatars, settingsOpen, onCloseSettings }) 
   const { c, api } = couple;
   const [sheet, setSheet] = useState(null); // "diary" | "memories" | null[cite: 1]
   const linked = !!c?.linked;
-  const diary = useDiary(api, linked && sheet === "diary");
+  // Nhật ký tải TRƯỚC ngay khi đã liên kết (không đợi bấm mở bảng) + nhớ trên máy theo tên -> bấm vào là có dữ liệu liền; mở bảng thì làm mới ngầm
+  const diary = useDiary(api, linked, avatars?.myName || "");
+  const reloadDiary = diary.reload;
+  useEffect(() => {
+    if (sheet === "diary" && linked) reloadDiary();
+  }, [sheet]); // eslint-disable-line react-hooks/exhaustive-deps
   const together = useFetch(api, "/api/couple/together", linked && sheet === "memories");
   const weekly = useFetch(api, "/api/couple/weekly", linked && sheet === "memories");
   const close = () => setSheet(null);
@@ -388,7 +421,8 @@ const styles = StyleSheet.create({
   bigNum: { fontSize: 28, fontWeight: "800", marginTop: 2 },
   memSmall: { fontSize: 12, textAlign: "center", marginTop: 2 },
   sheetRoot: { flex: 1, justifyContent: "flex-end" },
-  sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 10, flexShrink: 1 },
+  sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingTop: 0, flexShrink: 1 },
+  dragZone: { paddingTop: 10 },
   sheetHandle: { alignSelf: "center", width: 40, height: 5, borderRadius: 3, marginBottom: 12 },
   sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, marginBottom: 16 },
   sheetTitle: { fontSize: 18, fontWeight: "800" },

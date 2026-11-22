@@ -9,13 +9,16 @@
 // Dùng ScrollView thường (không phải FlatList) chiếm hết khung tab; `refreshControl` (kéo để làm mới) do CoupleSheet truyền xuống.
 // =============================================================================
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Animated, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { Avatar } from "../Avatar";
 import { Btn, Input } from "./AgentHomeCards";
 
-const PAGE = 14; // số ngày mỗi trang (server giới hạn 31)
+const PAGE = 14; // số ngày mỗi trang khi cuộn tải thêm (server giới hạn 31)
+const FIRST_PAGE = 7; // trang ĐẦU nhỏ hơn -> server trả nhanh hơn; thiếu thì tự tải thêm cho đầy khung
+const CACHE_KEY = (k) => `couple_diary:${k}`;
 const MAX_NOTE = 800;
 const buzz = (kind = "light") => {
   try {
@@ -38,7 +41,8 @@ function mergeFirstPage(prev, page) {
   };
 }
 
-export function useDiary(api, enabled = true) {
+// cacheKey (vd. tên đăng nhập): có thì trang đầu được nhớ trên máy -> mở nhật ký là có dữ liệu NGAY, bản mới tải ngầm rồi thay vào.
+export function useDiary(api, enabled = true, cacheKey = "") {
   const [state, setState] = useState({ days: [], hasMore: false, nextBefore: null });
   const [loaded, setLoaded] = useState(false); // đã có ít nhất một lần tải thành công
   const [loading, setLoading] = useState(false);
@@ -50,6 +54,22 @@ export function useDiary(api, enabled = true) {
   const moreLock = useRef(false);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const loadSeq = useRef(0); // chỉ kết quả của lần tải MỚI NHẤT được ghi (bản cũ về trễ không đè bản mới)
+  const gotFresh = useRef(false); // đã có dữ liệu từ server -> bỏ qua bản nhớ trên máy nếu nó đọc xong chậm hơn
+
+  // bản nhớ trên máy: hiện tức thì trong lúc chờ server
+  useEffect(() => {
+    if (!cacheKey) return;
+    AsyncStorage.getItem(CACHE_KEY(cacheKey))
+      .then((v) => {
+        if (!v || !mounted.current || gotFresh.current) return;
+        const cached = JSON.parse(v);
+        if (!Array.isArray(cached?.days)) return;
+        setState((prev) => (prev.days.length ? prev : { days: cached.days, hasMore: !!cached.has_more, nextBefore: cached.next_before || null }));
+        setLoaded(true);
+      })
+      .catch(() => {});
+  }, [cacheKey]);
 
   useEffect(() => {
     mounted.current = true;
@@ -60,20 +80,23 @@ export function useDiary(api, enabled = true) {
 
   const load = useCallback(async () => {
     if (!enabled) return;
+    const mine = (loadSeq.current += 1);
     setLoading(true);
     try {
-      const page = await api(`/api/couple/diary?limit=${PAGE}`);
-      if (!mounted.current) return;
+      const page = await api(`/api/couple/diary?limit=${FIRST_PAGE}`);
+      if (!mounted.current || mine !== loadSeq.current) return;
       if (!Array.isArray(page?.days)) throw new Error("server chưa hỗ trợ nhật ký theo ngày");
+      gotFresh.current = true;
       setState((prev) => mergeFirstPage(prev, page));
       setLoaded(true);
       setFailed(false);
+      if (cacheKey) AsyncStorage.setItem(CACHE_KEY(cacheKey), JSON.stringify({ days: page.days, has_more: page.has_more, next_before: page.next_before })).catch(() => {});
     } catch {
-      if (mounted.current) setFailed(true); // giữ nguyên dữ liệu cũ
+      if (mounted.current && mine === loadSeq.current) setFailed(true); // giữ nguyên dữ liệu cũ
     } finally {
-      if (mounted.current) setLoading(false);
+      if (mounted.current && mine === loadSeq.current) setLoading(false);
     }
-  }, [api, enabled]);
+  }, [api, enabled, cacheKey]);
 
   useEffect(() => {
     load();

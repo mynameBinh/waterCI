@@ -1,8 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Image } from "expo-image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Image,
+  AppState,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -25,7 +27,28 @@ import TheoDoiGoalsSection, { prefetchGoals } from "./TheoDoiGoalsSection";
 import { API_BASE, EmptyState, PhotoGrid, SectionHeader, SummaryCard, thumbUrl } from "./TheoDoiShared";
 
 const BADGE_TITLE = "Bình đẹp zai vippro";
-const REFRESH_INTERVAL_MS = 10000; // tự động cập nhật mỗi 10 giây (chỉ khi đang mở tab)
+const REFRESH_INTERVAL_MS = 15000; // tự động cập nhật mỗi 15 giây (chỉ khi đang mở tab)
+const IMAGE_CACHE_CLEAR_KEY = "theodoi_image_cache_last_cleared";
+const IMAGE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+let cacheClearInProgress = false;
+
+async function clearTrackingImageCacheIfDue() {
+  if (cacheClearInProgress) return;
+  cacheClearInProgress = true;
+  try {
+    const saved = await AsyncStorage.getItem(IMAGE_CACHE_CLEAR_KEY);
+    const lastCleared = saved ? Number(saved) : 0;
+    const now = Date.now();
+    if (saved && Number.isFinite(lastCleared) && now - lastCleared < IMAGE_CACHE_TTL_MS) return;
+
+    await Promise.all([Image.clearMemoryCache(), Image.clearDiskCache()]);
+    await AsyncStorage.setItem(IMAGE_CACHE_CLEAR_KEY, String(now));
+  } catch {
+    // Nếu không dọn được, giữ cache hiện tại và thử lại ở lần mở app tiếp theo.
+  } finally {
+    cacheClearInProgress = false;
+  }
+}
 
 // Cache ở module-level: giữ lại dữ liệu của lần tải gần nhất để khi người
 // dùng chuyển tab qua lại, component hiện luôn dữ liệu cũ (không loading
@@ -133,6 +156,20 @@ export default function TheoDoiTab({ token, containerStyle, active = true }) {
   useEffect(() => {
     prefetchGoals(token);
   }, [token]);
+
+  // Cache ảnh Theo dõi chỉ giữ tối đa 24 giờ. Kiểm tra khi mở app/quay lại
+  // foreground và định kỳ khi app đang hoạt động.
+  useEffect(() => {
+    clearTrackingImageCacheIfDue();
+    const intervalId = setInterval(clearTrackingImageCacheIfDue, 60 * 60 * 1000);
+    const appStateSub = AppState.addEventListener("change", (state) => {
+      if (state === "active") clearTrackingImageCacheIfDue();
+    });
+    return () => {
+      clearInterval(intervalId);
+      appStateSub.remove();
+    };
+  }, []);
 
   // Polling chỉ chạy khi đang MỞ tab này.
   useEffect(() => {
