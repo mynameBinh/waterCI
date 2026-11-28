@@ -349,7 +349,8 @@ export const CoupleSheetBody = ({ colors, couple, avatars = {} }) => {
       <View style={styles.flex}>
         {tab === "today" && <TodayTab colors={colors} couple={couple} refreshControl={refreshControl} onOpenDiary={() => setTab("diary")} />}
         {tab === "diary" && (
-          <DiaryTab colors={colors} diary={diary} avatars={avatars} partnerName={c.partner_username} refreshControl={refreshControl}
+          <DiaryTab colors={colors} diary={diary} avatars={avatars} partnerName={c.partner_username} partnerAccent={c.partner_theme?.accent}
+            refreshControl={refreshControl}
             todayInfo={{ question: c.question, my_answer: c.my_answer, partner_answer: c.partner_answer }} onAnswer={answer} answerErr={couple.err} />
         )}
         {tab === "memories" && (

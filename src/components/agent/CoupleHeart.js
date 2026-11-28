@@ -71,17 +71,40 @@ const FLAME_DROP = 15; // hạ ngọn lửa chuỗi (sau khi hoàn thành) xuố
 const FLAME_END_CY = WHALE_TOP - 3 - (FLAME_W * FLAME_END) / 2 - 1 + FLAME_DROP; // tâm ngọn lửa khi đã bay lên: đáy lửa nằm ngay trên đỉnh ảnh cá (tính cả biên độ nhấp nhô 3px). Có thể âm = lửa nhô lên trên mép khung, không làm đổi chiều cao khung
 const BABY = 26; // cỡ cá con
 const BABY_STEP = 30; // bước giữa hai cá con liền kề
-const BABY_MIN_Y = LINE_Y - 8; // cá con bơi từ ngang mặt nước trở xuống (chỉnh số này để bơi cao/thấp hơn)
+const BABY_MIN_Y = LINE_Y + 11; // mép TRÊN vùng bơi của cá con (≈ giữa khung; lớn hơn = bơi thấp hơn, không bao giờ lan lên trên)
+const BABY_SWIM_X = 16; // lề ngang vùng bơi của cá con (trước là COLW - START_BACK = 70) -> càng nhỏ càng bơi rộng sang hai bên
+const BABY_FLOOR_GAP = 0; // khoảng cách từ đáy khung tới chân cá con (trước là 2) -> 0 = chạm sát đáy
+const BABY_SINK = 21; // hạ đáy vùng bơi thêm bấy nhiêu px so với đáy khung (cá con xuống sâu hơn; 0 = như trước; tăng nếu vẫn thấy cao, giảm nếu cá bị lẹm ra ngoài thẻ)
+const BABY_DETAIL_OP = 0.4; // ảnh gốc (xanh) phủ mờ lên trên con cá đã nhuộm chỉ để giữ chi tiết mắt/viền/đốm sáng (không phải một lớp màu); 0 = mảng màu phẳng, tăng thì ngả xanh hơn
+// 6 loại "cá con"; thứ tự và tần suất xuất hiện theo chuỗi do BABY_CYCLE (bên dưới) quyết định.
+//   floor: true = bò sát đáy; crawl: hệ số tốc độ (nhỏ = chậm); facesLeft: ảnh gốc đang quay đầu sang TRÁI (sai hướng thì đổi true/false)
+// Metro bắt buộc require tĩnh nên đường dẫn viết thẳng từng dòng. Đường dẫn tính từ file này tới <project>/assets/couple_kids/ — chỉnh số "../" cho đúng thư mục của bạn.
+const BABY_KINDS = [
+  { key: "ca_heo", src: require("../../../assets/couple_kids/ca_heo.png"), floor: false, crawl: 1, facesLeft: false },
+  { key: "ca_ngua", src: require("../../../assets/couple_kids/ca_ngua.png"), floor: true, crawl: 0.8, facesLeft: true },
+  { key: "muc", src: require("../../../assets/couple_kids/muc.png"), floor: false, crawl: 1, facesLeft: true },
+  { key: "rua", src: require("../../../assets/couple_kids/rua.png"), floor: true, crawl: 0.9, facesLeft: false },
+  { key: "sao_bien", src: require("../../../assets/couple_kids/sao_bien.png"), floor: true, crawl: 0.35, facesLeft: true },
+  { key: "ca_voi", src: require("../../../assets/couple_kids/ca_voi.png"), floor: false, crawl: 1, facesLeft: true },
+];
+// Thứ tự lặp lại theo chuỗi: con thứ i dùng BABY_CYCLE[i % độ dài]. Vòng 20 con: cá voi 7 con (35%), heo/ngựa/mực mỗi loại 3 con (15%), rùa/sao biển mỗi loại 2 con (10%).
+// Muốn đổi tỉ lệ thì thêm/bớt "ca_voi" (hoặc loài khác) trong mảng; cá voi đã được rải đều để không dồn cụm.
+const BABY_CYCLE = [
+  "ca_voi", "ca_heo", "ca_ngua", "ca_voi", "muc", "rua", "ca_voi", "sao_bien", "ca_heo", "ca_voi",
+  "ca_ngua", "muc", "ca_voi", "rua", "ca_heo", "ca_voi", "sao_bien", "ca_ngua", "ca_voi", "muc",
+];
+const KIND_BY_KEY = Object.fromEntries(BABY_KINDS.map((k) => [k.key, k]));
 // Đàn cá con theo CHUỖI: số cá = streak (tồn tại suốt, qua ngày mới cũng không mất). Cá mới nhất ở lớp trước (to, rõ);
 // khi lớp trước đầy thì cá cũ hơn lùi dần ra lớp sau: nhỏ hơn, mờ hơn, bơi cao hơn (xa hơn) -> có chiều sâu mà vẫn đủ số lượng.
 //   size/alpha: cỡ + độ đậm; rows: số hàng chỗ xuất hiện; step: bước ngang; y0/dy: chỗ xuất hiện; down: nhấc đáy vùng bơi lên bấy nhiêu px (xa hơn = nông hơn)
 //   lite: lớp xa dùng hoạt ảnh nhẹ (ít chặng bơi, không nhún) để đỡ tốn máy khi chuỗi dài
-const MAX_BABIES = 60; // số cá con tối đa thật sự vẽ (chuỗi dài hơn thì vẽ 60 con mới nhất) — tăng được nhưng sẽ nặng máy hơn
+const MAX_BABIES = 120; // số cá con tối đa thật sự vẽ (chuỗi dài hơn thì vẽ 60 con mới nhất) — tăng được nhưng sẽ nặng máy hơn
+const BABY_FRONT_DETAIL_OP = 0.86; // riêng LỚP ĐẦU (7 con): độ đậm ảnh gốc phủ lên cá đã nhuộm -> chi tiết mắt/viền/vảy rõ nét, cá bớt "phẳng" và mờ. Chuẩn chung là BABY_DETAIL_OP (0.4); tăng thì rõ hơn nhưng ngả xanh hơn (ảnh gốc màu xanh)
 const BABY_TIERS = [
-  { size: BABY, alpha: 1, rows: 2, step: BABY_STEP, y0: LINE_Y + 12, dy: 28, minY: BABY_MIN_Y, down: 0, lite: false },
-  { size: 20, alpha: 0.62, rows: 2, step: 24, y0: LINE_Y + 6, dy: 20, minY: BABY_MIN_Y, down: 14, lite: false },
-  { size: 15, alpha: 0.4, rows: 3, step: 18, y0: LINE_Y, dy: 11, minY: BABY_MIN_Y + 4, down: 30, lite: true },
-  { size: 11, alpha: 0.26, rows: 4, step: 14, y0: LINE_Y - 2, dy: 7, minY: BABY_MIN_Y + 6, down: 44, lite: true },
+  { size: BABY, alpha: 1, cap: 7, rows: 2, step: BABY_STEP, y0: LINE_Y + 12, dy: 28, minY: BABY_MIN_Y, down: 0, lite: false },
+  { size: 20, alpha: 0.62, cap: 12, rows: 2, step: 24, y0: LINE_Y + 6, dy: 20, minY: BABY_MIN_Y, down: 4, lite: false },
+  { size: 15, alpha: 0.4, cap: 25, rows: 3, step: 18, y0: LINE_Y, dy: 11, minY: BABY_MIN_Y + 2, down: 8, lite: true },
+  { size: 11, alpha: 0.26, cap: Infinity, rows: 4, step: 14, y0: LINE_Y - 2, dy: 7, minY: BABY_MIN_Y + 4, down: 12, lite: true },
 ];
 const centerOut = (n) => {
   const mid = (n - 1) / 2;
@@ -258,7 +281,7 @@ const KissHeart = memo(function KissHeart({ x, y, dx, dy, size, dur, delay, colo
 
 // Cá con: bắn ra từ chỗ hai cá vừa hôn tới vị trí của mình (spring), rồi BƠI LUNG TUNG tự do trong vùng giữa (bounds):
 // mỗi con tự chọn các điểm đến ngẫu nhiên, tốc độ riêng, nghỉ ngắn giữa các chặng, quay đầu theo hướng bơi. children = ảnh cá (hoặc chip "+N" thì wander = false)
-const Baby = memo(function Baby({ x, y, size, fromX, fromY, delay, phase, wander, minX, maxX, minY, maxY, instant, alpha = 1, lite = false, children }) {
+const Baby = memo(function Baby({ x, y, size, fromX, fromY, delay, phase, wander, minX, maxX, minY, maxY, instant, alpha = 1, lite = false, floor = false, crawl = 1, facesLeft = FACES_LEFT, children }) {
   const appear = useRef(new Animated.Value(instant ? 1 : 0)).current; // instant: đã xem hoạt ảnh rồi -> hiện sẵn tại chỗ, không bắn ra lại
   const bob = useRef(new Animated.Value(phase)).current;
   const px = useRef(new Animated.Value(0)).current; // dịch ngang so với vị trí xếp ban đầu
@@ -274,22 +297,23 @@ const Baby = memo(function Baby({ x, y, size, fromX, fromY, delay, phase, wander
     for (let k = 0; k < N; k += 1) {
       const last = k === N - 1;
       const tx = last ? x : rnd(minX, Math.max(minX, maxX));
-      const ty = last ? y : rnd(minY, Math.max(minY, maxY));
+      // sinh vật đáy (rùa, cá ngựa, sao biển): chỉ bò ngang sát nền, nhấp nhô tối đa ~2.5px; còn lại bơi lung tung cả vùng
+      const ty = floor ? y - (last ? 0 : rnd(0, 2.5)) : last ? y : rnd(minY, Math.max(minY, maxY));
       const dist = Math.hypot(tx - cx, ty - cy);
-      const speed = Math.random() < 0.25 ? rnd(48, 75) : rnd(24, 40); // px/giây; thỉnh thoảng phóng vọt một đoạn
-      out.push({ dx: tx - x, dy: ty - y, dur: Math.max(900, Math.min(4500, (dist / speed) * 1000)), right: tx >= cx, rest: rnd(0, 300) });
+      const speed = (floor ? rnd(12, 24) : Math.random() < 0.25 ? rnd(48, 75) : rnd(24, 40)) * crawl; // px/giây; cá bơi thỉnh thoảng phóng vọt, sinh vật đáy bò chậm
+      out.push({ dx: tx - x, dy: ty - y, dur: Math.max(900, Math.min(floor ? 9000 : 4500, (dist / speed) * 1000)), right: tx >= cx, rest: floor ? rnd(300, 1400) : rnd(0, 300) });
       cx = tx;
       cy = ty;
     }
     return out;
-  }, [wander, lite, x, y, minX, maxX, minY, maxY]);
+  }, [wander, lite, floor, crawl, x, y, minX, maxX, minY, maxY]);
   useEffect(() => {
     const swim = legs.length
       ? Animated.loop(Animated.sequence(legs.flatMap((l) => [
           Animated.parallel([
             Animated.timing(px, { toValue: l.dx, duration: l.dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
             Animated.timing(py, { toValue: l.dy, duration: l.dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-            Animated.timing(face, { toValue: (l.right ? -1 : 1) * (FACES_LEFT ? 1 : -1), duration: 220, useNativeDriver: true }),
+            Animated.timing(face, { toValue: (l.right ? -1 : 1) * (facesLeft ? 1 : -1), duration: 220, useNativeDriver: true }),
           ]),
           Animated.delay(l.rest),
         ])))
@@ -308,7 +332,7 @@ const Baby = memo(function Baby({ x, y, size, fromX, fromY, delay, phase, wander
     a.start();
     b?.start();
     return () => { a.stop(); b?.stop(); };
-  }, [delay, phase, legs, instant, lite, appear, bob, px, py, face]);
+  }, [delay, phase, legs, instant, lite, facesLeft, appear, bob, px, py, face]);
   return (
     <Animated.View
       pointerEvents="none"
@@ -323,8 +347,8 @@ const Baby = memo(function Baby({ x, y, size, fromX, fromY, delay, phase, wander
       }}
     >
       <Animated.View style={{ transform: [
-        { translateY: bob.interpolate({ inputRange: [0, 1], outputRange: [1.5, -1.5] }) },
-        { rotate: bob.interpolate({ inputRange: [0, 1], outputRange: ["3deg", "-3deg"] }) },
+        { translateY: bob.interpolate({ inputRange: [0, 1], outputRange: floor ? [0.5, -0.5] : [1.5, -1.5] }) },
+        { rotate: bob.interpolate({ inputRange: [0, 1], outputRange: floor ? ["1deg", "-1deg"] : ["3deg", "-3deg"] }) },
         ...(wander ? [{ scaleX: face }] : []),
       ] }}>
         {children}
@@ -404,6 +428,55 @@ export const BabyFish = memo(function BabyFish({ i, shapeKey, accentA, accentB, 
           )
         ) : null,
       )}
+    </View>
+  );
+});
+
+// Màu cá con = MỘT màu duy nhất tính ra cho từng con: lai (trộn màu mình + màu người kia theo tỉ lệ ngẫu nhiên 25–75%), rồi 70% số con
+// bị lệch gen (trộn thêm 12–40% một màu ngẫu nhiên khác trong bảng màu). Ngẫu nhiên theo hạt giống như cũ nên con thứ i luôn ra đúng màu đó.
+const hexToRgb = (c) => {
+  const m = typeof c === "string" ? /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c.trim()) : null;
+  if (!m) return null;
+  const h = m[1].length === 3 ? m[1].split("").map((x) => x + x).join("") : m[1];
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+const mixColor = (a, b, t) => {
+  const A = hexToRgb(a);
+  const B = hexToRgb(b);
+  if (!A || !B) return a || b;
+  return `#${A.map((v, k) => Math.round(v + (B[k] - v) * t).toString(16).padStart(2, "0")).join("")}`;
+};
+// Cá con từ ảnh sinh vật biển (ảnh gốc chỉ có màu xanh): nhuộm bằng tintColor theo màu đã tính, rồi phủ ảnh gốc mờ để giữ chi tiết.
+const SeaKid = memo(function SeaKid({ i, kind, shapeKey, accentA, accentB, size = BABY, seedKey = "", detailOp = BABY_DETAIL_OP }) {
+  const { accents } = useTheme();
+  const tint = useMemo(() => {
+    const colorOf = (key) => {
+      const a = accents?.[key];
+      return (a && (a.primary || a.main || a.color || a.light)) || null;
+    };
+    const rnd = seeded(hashStr(`${seedKey}|${shapeKey}|${accentA}|${accentB || ""}|${i}`));
+    let c = colorOf(accentA);
+    if (accentB && accentB !== accentA) {
+      const t = 0.25 + rnd() * 0.5; // tỉ lệ lai
+      const cb = colorOf(accentB);
+      if (c && cb) c = mixColor(c, cb, t);
+    }
+    const keys = Object.keys(accents || {}).filter((k) => k !== accentA && k !== accentB);
+    const roll = rnd();
+    const pick = rnd();
+    const amount = 0.12 + rnd() * 0.28; // mức lệch gen
+    if (c && keys.length && roll < 0.7) {
+      const g = colorOf(keys[Math.floor(pick * keys.length)]);
+      if (g) c = mixColor(c, g, amount);
+    }
+    return c;
+  }, [i, shapeKey, accentA, accentB, seedKey, accents]);
+  const fill = { position: "absolute", left: 0, top: 0, width: size, height: size };
+  return (
+    <View style={{ width: size, height: size }}>
+      {tint ? <Image source={kind.src} resizeMode="contain" fadeDuration={0} accessibilityIgnoresInvertColors style={[fill, { tintColor: tint }]} /> : null}
+      <Image source={kind.src} resizeMode="contain" fadeDuration={0} accessibilityIgnoresInvertColors style={[fill, { opacity: tint ? detailOp : 1 }]} />
     </View>
   );
 });
@@ -752,10 +825,12 @@ const CoupleHeart = memo(function CoupleHeart({
   // Chỗ xuất hiện của cá thứ i trong lớp = i % sức chứa lớp -> ngày mới chỉ cá ở ranh giới lớp đổi chỗ, các con khác đứng yên.
   const babyLayout = useMemo(() => {
     if (!w || streak <= 0) return [];
-    const availW = w - 2 * (COLW - START_BACK) - 12;
+    const availW = w - 2 * BABY_SWIM_X - 12;
     const tiers = BABY_TIERS.map((t) => {
-      const perRow = Math.max(1, Math.min(10, Math.floor(availW / t.step)));
-      return { ...t, perRow, cap: perRow * t.rows, order: centerOut(perRow) };
+      // cap = sức chứa CỐ ĐỊNH của lớp (Infinity = không giới hạn, chỉ bị trần MAX_BABIES); số cá mỗi hàng chia theo cap/rows, bị chặn bởi bề rộng thẻ
+      const perRow = Math.max(1, Math.min(10, Math.floor(availW / t.step), Math.ceil(t.cap / t.rows)));
+      const rows = Number.isFinite(t.cap) ? Math.ceil(t.cap / perRow) : t.rows;
+      return { ...t, perRow, rows, posCap: Number.isFinite(t.cap) ? t.cap : perRow * rows, order: centerOut(perRow) };
     });
     const total = Math.min(Math.floor(streak), MAX_BABIES);
     const out = [];
@@ -768,19 +843,22 @@ const CoupleHeart = memo(function CoupleHeart({
         ti += 1;
       }
       const t = tiers[ti];
-      const slot = i % t.cap;
+      const slot = i % t.posCap;
       const row = Math.floor(slot / t.perRow);
       const col = t.order[slot % t.perRow];
+      const kind = KIND_BY_KEY[BABY_CYCLE[i % BABY_CYCLE.length]]; // chuỗi thứ i -> sinh vật theo BABY_CYCLE (cá voi nhiều hơn)
+      const floorY = ROW_H - t.size - BABY_FLOOR_GAP + BABY_SINK - t.down; // đáy vùng bơi của lớp này (lớp xa nông hơn một chút cho có chiều sâu)
       out.push({
+        kind,
         i,
         ti,
         size: t.size,
         alpha: t.alpha,
         lite: t.lite,
         x: w / 2 + (col - (t.perRow - 1) / 2) * t.step - t.size / 2,
-        y: t.y0 - ((t.rows - 1) * t.dy) / 2 + row * t.dy, // chỗ xuất hiện ban đầu: dưới mặt nước
+        y: kind.floor ? floorY : t.y0 - ((t.rows - 1) * t.dy) / 2 + row * t.dy, // chỗ xuất hiện ban đầu: dưới mặt nước (sinh vật đáy: ngay trên nền)
         minY: t.minY,
-        maxY: ROW_H - t.size - 2 - t.down,
+        maxY: floorY,
       });
     }
     return out.sort((a, b) => b.ti - a.ti || a.i - b.i); // lớp xa vẽ trước (nằm sau)
@@ -853,8 +931,9 @@ const CoupleHeart = memo(function CoupleHeart({
               return (
                 <Baby key={b.i} x={b.x} y={b.y} size={b.size} alpha={b.alpha} lite={b.lite}
                   fromX={w / 2 - b.size / 2 - b.x} fromY={WHALE_TOP + 40 - b.y} delay={0} phase={(b.i % 2) * 0.5} instant={!newborn}
-                  wander minX={COLW - START_BACK} maxX={w - (COLW - START_BACK) - b.size} minY={b.minY} maxY={b.maxY}>
-                  <BabyFish i={b.i} gene size={b.size} seedKey={partnerName || ""}
+                  wander floor={b.kind.floor} crawl={b.kind.crawl} facesLeft={b.kind.facesLeft}
+                  minX={BABY_SWIM_X} maxX={w - BABY_SWIM_X - b.size} minY={b.minY} maxY={b.maxY}>
+                  <SeaKid i={b.i} kind={b.kind} size={b.size} seedKey={partnerName || ""} detailOp={b.ti === 0 ? BABY_FRONT_DETAIL_OP : BABY_DETAIL_OP}
                     shapeKey={b.i % 2 ? partnerThemeKey : aiThemeKey} accentA={accentKey} accentB={partnerAccent} />
                 </Baby>
               );

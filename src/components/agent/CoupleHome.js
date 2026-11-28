@@ -35,7 +35,7 @@ import { leftLines } from "./CoupleSheet";
 // ── bảng trượt từ dưới lên ──[cite: 1]
 const CLOSE_DIST = 90; // kéo xuống quá bấy nhiêu px thì đóng bảng
 const CLOSE_VELOCITY = 0.8; // hoặc vuốt xuống đủ nhanh (px/ms)
-const BottomSheet = ({ visible, onClose, title, colors, children }) => {
+const BottomSheet = ({ visible, onClose, title, colors, children, flushBottom = false }) => {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const [mounted, setMounted] = useState(visible);
@@ -87,7 +87,7 @@ const BottomSheet = ({ visible, onClose, title, colors, children }) => {
             styles.sheet,
             {
               backgroundColor: colors.card,
-              paddingBottom: Math.max(insets.bottom, 12) + 8,
+              paddingBottom: flushBottom ? 0 : Math.max(insets.bottom, 12) + 8, // flushBottom: nội dung tự cuộn tới đáy, tự lo phần đệm
               height: height * 0.86,
               transform: [{ translateY: Animated.add(anim.interpolate({ inputRange: [0, 1], outputRange: [height * 0.5, 0] }), drag) }],
             },
@@ -286,11 +286,19 @@ const DiaryTile = ({ colors, c, avatars, partnerName, attention, onPress }) => {
       <Text style={[styles.question, { color: colors.text }]} numberOfLines={3}>
         {c.question || "Chưa có câu hỏi hôm nay."}
       </Text>
-      {!!partnerText && (
+      {!!c.question && !!c.my_answer && (
         <View style={styles.chatRow}>
+          <Avatar name="Bạn" size={24} ringColor={colors.primaryBorder} uri={avatars.myUri} source={avatars.myUri ? null : avatars.mySource} />
+          <View style={[styles.bubble, { backgroundColor: colors.primarySoft }]}>
+            <Text style={[styles.bubbleText, { color: colors.text }]} numberOfLines={2}>{c.my_answer}</Text>
+          </View>
+        </View>
+      )}
+      {!!partnerText && (
+        <View style={[styles.chatRow, !!c.my_answer && { marginTop: 6 }]}>
           <Avatar name={partnerName} size={24} ringColor={colors.primaryBorder} source={avatars.partnerSource} />
           <View style={[styles.bubble, { backgroundColor: colors.background }]}>
-            <Text style={[styles.bubbleText, { color: c.partner_answer ? colors.text : colors.textMuted }]} numberOfLines={3}>
+            <Text style={[styles.bubbleText, { color: c.partner_answer ? colors.text : colors.textMuted }]} numberOfLines={2}>
               {partnerText}
             </Text>
           </View>
@@ -325,7 +333,7 @@ const MemoriesTile = ({ colors, c, attention, onPress }) => {
         <Ionicons name="chevron-forward" size={15} color={colors.textMuted} />
       </View>
       <View style={styles.memBody}>
-        <BeatHeart color={colors.primary} />
+        <BeatHeart color={colors.primary} size={52} />
         {big != null && <Text style={[styles.bigNum, { color: colors.primaryText }]}>{big}</Text>}
         <Text style={[styles.memSmall, { color: colors.textMuted }]}>{small}</Text>
       </View>
@@ -335,6 +343,8 @@ const MemoriesTile = ({ colors, c, attention, onPress }) => {
 
 const CoupleHome = ({ colors, couple, avatars, settingsOpen, onCloseSettings }) => {
   const { c, api } = couple;
+  const sheetInsets = useSafeAreaInsets();
+  const sheetBottomPad = Math.max(sheetInsets.bottom, 12) + 8; // giống phần đệm đáy mặc định của BottomSheet
   const [sheet, setSheet] = useState(null); // "diary" | "memories" | null[cite: 1]
   const linked = !!c?.linked;
   // Nhật ký tải TRƯỚC ngay khi đã liên kết (không đợi bấm mở bảng) + nhớ trên máy theo tên -> bấm vào là có dữ liệu liền; mở bảng thì làm mới ngầm
@@ -368,8 +378,9 @@ const CoupleHome = ({ colors, couple, avatars, settingsOpen, onCloseSettings }) 
         <MemoriesTile colors={colors} c={c} attention={couple.memoriesAttention} onPress={() => setSheet("memories")} />
       </View>
 
-      <BottomSheet visible={sheet === "diary"} onClose={close} title="Nhật ký" colors={colors}>
-        <DiaryTab colors={colors} diary={diary} avatars={avatars} partnerName={partnerName} refreshControl={diaryRefresh}
+      <BottomSheet visible={sheet === "diary"} onClose={close} title="Nhật ký" colors={colors} flushBottom>
+        <DiaryTab bottomInset={sheetBottomPad} colors={colors} diary={diary} avatars={avatars} partnerName={partnerName} partnerAccent={c.partner_theme?.accent}
+          refreshControl={diaryRefresh}
           todayInfo={{ question: c.question, my_answer: c.my_answer, partner_answer: c.partner_answer }} onAnswer={answer} answerErr={couple.err} />
       </BottomSheet>
       <BottomSheet visible={sheet === "memories"} onClose={close} title="Kỷ niệm" colors={colors}>
@@ -408,7 +419,7 @@ const styles = StyleSheet.create({
   leftRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 6 },
   leftText: { flex: 1, fontSize: 12 },
   tiles: { flexDirection: "row", gap: 12, alignItems: "stretch", marginBottom: 12 },
-  tile: { flex: 1, borderRadius: 16, padding: 12, minHeight: 190 },
+  tile: { flex: 1, borderRadius: 16, padding: 12, minHeight: 150 },
   tileDiary: { flex: 1.45 },
   tileHead: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
   dot: { width: 8, height: 8, borderRadius: 4, marginLeft: 6 },
